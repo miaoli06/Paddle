@@ -15,6 +15,7 @@
 #pragma once
 
 #include <ThreadPool.h>
+
 #include <fstream>
 #include <memory>
 #include <mutex>  // NOLINT
@@ -48,6 +49,7 @@ class Dataset {
   virtual ~Dataset() {}
   // set file list
   virtual void SetFileList(const std::vector<std::string>& filelist) = 0;
+  virtual void SetIndexFileList(const std::vector<std::string>& filelist) {}
   // set readers' num
   virtual void SetThreadNum(int thread_num) = 0;
   // set workers' num
@@ -237,6 +239,22 @@ class DatasetImpl : public Dataset {
                                        bool discard_remaining_ins = false);
   virtual void DynamicAdjustReadersNum(int thread_num);
   virtual void SetFleetSendSleepSeconds(int seconds);
+  virtual std::vector<T>& GetInputRecord() { return input_records_; }
+
+  virtual std::set<uint16_t> GetSlotsIdx(
+      const std::set<std::string>& str_slots) {
+    std::set<uint16_t> slots_idx;
+
+    auto multi_slot_desc = data_feed_desc_.multi_slot_desc();
+    for (int i = 0; i < multi_slot_desc.slots_size(); ++i) {
+      std::string cur_slot = multi_slot_desc.slots(i).name();
+      if (str_slots.find(cur_slot) != str_slots.end()) {
+        slots_idx.insert(i);
+      }
+    }
+
+    return slots_idx;
+  }
 
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
@@ -363,10 +381,10 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
  public:
   virtual void ReceiveSuffleData(const int client_id, const char* msg, int len);
 
- private:
+ protected:
   void MergeInsKeys(const Channel<SlotRecord>& in);
 
- private:
+ protected:
   Channel<SlotRecord> shuffle_channel_ = nullptr;
   std::vector<int> mpi_flags_;
   std::atomic<int> finished_counter_{0};
@@ -377,6 +395,19 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
   std::atomic<int> shuffle_counter_{0};
   void* data_consumer_ = nullptr;
   std::atomic<int> receiver_cnt_{0};
+};
+
+class InputTableDataset : public PadBoxSlotDataset {
+ public:
+  virtual void LoadIntoMemory();
+  virtual void SetIndexFileList(const std::vector<std::string>& filelist) {
+    index_filelist_ = filelist;
+  }
+
+ private:
+  void LoadIndexIntoMemory();
+
+  std::vector<std::string> index_filelist_;
 };
 #endif
 

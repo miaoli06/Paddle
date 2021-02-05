@@ -489,6 +489,9 @@ DEFINE_int32(gpu_replica_cache_dim, 8, "use_gpu_replica_cache,the dim");
 DEFINE_bool(padbox_dataset_disable_shuffle, false,
             "if true ,will disable data shuffle");
 DEFINE_int32(padbox_slotrecord_extend_dim, 0, "paddlebox pcoc extend dim");
+DEFINE_bool(padbox_auc_runner_mode, false, "auc runner mode");
+DEFINE_bool(padbox_dataset_disable_polling, false, "if true ,will disable input file list polling");
+
 /**
  * MKLDNN related FLAG
  * Name: use_mkldnn

@@ -22,27 +22,26 @@ limitations under the License. */
 #include "paddle/fluid/framework/trainer_desc.pb.h"
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/device_context.h"
+#include "paddle/fluid/platform/gpu_info.h"
 #include "paddle/fluid/platform/lodtensor_printer.h"
 
 namespace paddle {
 namespace framework {
 
-BoxPSAsynDenseTable::BoxPSAsynDenseTable(const int device_num) :
-    device_num_(device_num) {
+BoxPSAsynDenseTable::BoxPSAsynDenseTable(const int device_num)
+    : device_num_(device_num) {
   device_grads_.resize(device_num);
 }
-BoxPSAsynDenseTable::~BoxPSAsynDenseTable() {
+BoxPSAsynDenseTable::~BoxPSAsynDenseTable() {}
 
-}
-
-void BoxPSAsynDenseTable::Init(const Scope& root_scope,
-    const std::vector<std::string> &param_need_sync,
-    const std::vector<std::string> &persistable_vars) {
-  root_scope_ = const_cast<paddle::framework::Scope *>(&root_scope);
+void BoxPSAsynDenseTable::Init(
+    const Scope& root_scope, const std::vector<std::string>& param_need_sync,
+    const std::vector<std::string>& persistable_vars) {
+  root_scope_ = const_cast<paddle::framework::Scope*>(&root_scope);
   VLOG(0) << "Begin Init For Aysnc Optimize";
   for (const auto& e : param_need_sync) {
-    if (e.find("param") != std::string::npos
-        && e.find("pow_acc") == std::string::npos) {
+    if (e.find("param") != std::string::npos &&
+        e.find("pow_acc") == std::string::npos) {
       VLOG(0) << "async mode choose " << e << " to update";
       async_param_list_.push_back(e);
       async_param_list_.push_back(e + "_moment1_0");
@@ -51,23 +50,26 @@ void BoxPSAsynDenseTable::Init(const Scope& root_scope,
   }
   ps_.resize(async_param_list_.size());
   VLOG(0) << "async_param_list_.size(): " << async_param_list_.size();
-  std::sort(async_param_list_.begin(), async_param_list_.end()); // xx_param.b_0, xx_param_moment1_0, xx_param_moment2_0
+  std::sort(
+      async_param_list_.begin(),
+      async_param_list_
+          .end());  // xx_param.b_0, xx_param_moment1_0, xx_param_moment2_0
   for (size_t i = 0; i < async_param_list_.size(); ++i) {
     VLOG(0) << "begin to copy " << async_param_list_[i];
     const LoDTensor& root_tensor =
         root_scope.FindVar(async_param_list_[i])->Get<LoDTensor>();
     VLOG(0) << "its size is " << root_tensor.numel();
     async_param_size_.push_back(root_tensor.numel());
-    ps_[i].mutable_data<float>( { root_tensor.numel(), 1 },
-        platform::CPUPlace());
+    ps_[i].mutable_data<float>({root_tensor.numel(), 1}, platform::CPUPlace());
     TensorCopy(*static_cast<const Tensor*>(&root_tensor), platform::CPUPlace(),
-        static_cast<Tensor*>(&(ps_[i])));
+               static_cast<Tensor*>(&(ps_[i])));
   }
 
   // Copy global lr for async mode
   for (const auto& e : persistable_vars) {
     if (e.find("learning_rate_") != std::string::npos) {
-      PADDLE_ENFORCE_LE(base_lr_, 0,
+      PADDLE_ENFORCE_LE(
+          base_lr_, 0,
           platform::errors::PreconditionNotMet(
               "lr have been set, previous value: %f, current var is %s",
               base_lr_, e.c_str()));
@@ -96,10 +98,10 @@ void BoxPSAsynDenseTable::Finalize(void) {
 
   for (size_t i = 0; i < async_param_list_.size(); ++i) {
     VLOG(0) << "begin to copy back" << async_param_list_[i];
-    auto* root_tensor = root_scope_->Var(async_param_list_[i])
-        ->GetMutable<LoDTensor>();
-    TensorCopySync(*static_cast<const Tensor*>(&ps_[i]),
-        platform::CPUPlace(), root_tensor);
+    auto* root_tensor =
+        root_scope_->Var(async_param_list_[i])->GetMutable<LoDTensor>();
+    TensorCopySync(*static_cast<const Tensor*>(&ps_[i]), platform::CPUPlace(),
+                   root_tensor);
   }
 
   ps_buffer_ = nullptr;
@@ -132,16 +134,16 @@ void BoxPSAsynDenseTable::AsyncUpdate() {
       LoDTensor* grad_tensor = &(*grad[0])[i];
       auto len = async_param_size_[i * 3];
       float* grad_data = grad_tensor->mutable_data<float>(platform::CPUPlace());
-      float* param_data = param_tensor->mutable_data<float>(
-          platform::CPUPlace());
+      float* param_data =
+          param_tensor->mutable_data<float>(platform::CPUPlace());
       float* mom1_data = mom1_tensor->mutable_data<float>(platform::CPUPlace());
       float* mom2_data = mom2_tensor->mutable_data<float>(platform::CPUPlace());
 
       // merge grad
       for (size_t k = 1; k < merge_num; ++k) {
         LoDTensor* other_grad_tensor = &(*grad[k])[i];
-        float* other_grad_data = other_grad_tensor->mutable_data<float>(
-            platform::CPUPlace());
+        float* other_grad_data =
+            other_grad_tensor->mutable_data<float>(platform::CPUPlace());
         for (size_t j = 0; j < len; ++j) {
           grad_data[j] += other_grad_data[j];
         }
@@ -159,11 +161,12 @@ void BoxPSAsynDenseTable::AsyncUpdate() {
       // VLOG(0) << "learning rate for " << async_param_list_[i * 3] << " is "
       // << learning_rate;
       for (size_t j = 0; j < len; ++j) {
-        mom1_data[j] = 0.99 * mom1_data[j] + 0.01 * grad_data[j]; // magic beta and episilon
-        mom2_data[j] = 0.9999 * mom2_data[j]
-            + 0.0001 * grad_data[j] * grad_data[j];
-        param_data[j] -= learning_rate
-            * (mom1_data[j] / (sqrt(mom2_data[j]) + 1e-8));
+        mom1_data[j] = 0.99 * mom1_data[j] +
+                       0.01 * grad_data[j];  // magic beta and episilon
+        mom2_data[j] =
+            0.9999 * mom2_data[j] + 0.0001 * grad_data[j] * grad_data[j];
+        param_data[j] -=
+            learning_rate * (mom1_data[j] / (sqrt(mom2_data[j]) + 1e-8));
       }
       // VLOG(0) << "update dense for " << async_param_list_[i*3] << ", param["
       // << tmp << "] - 0.000005 * [" << mom1_data[0] << "] / [" << mom1_data[1]
@@ -175,20 +178,20 @@ void BoxPSAsynDenseTable::AsyncUpdate() {
 
 void BoxPSAsynDenseTable::ReShape(const platform::Place& place) {
   int device_id = boost::get<platform::CUDAPlace>(place).GetDeviceId();
-  auto &grad = device_grads_[device_id];
+  auto& grad = device_grads_[device_id];
   grad.resize(async_param_size_.size() / 3);
   for (size_t i = 0; i < async_param_size_.size(); ++i) {
     if (i % 3 != 0) {
       continue;
     }
-    grad[i / 3].mutable_data<float>( {
-        static_cast<int64_t>(async_param_size_[i]), 1 }, place);
+    grad[i / 3].mutable_data<float>(
+        {static_cast<int64_t>(async_param_size_[i]), 1}, place);
   }
 }
 
 // async
 void BoxPSAsynDenseTable::PullDense(const platform::Place& place,
-    const Scope& scope) {
+                                    const Scope& scope) {
   // while(ps_buffer_->Size() != 0) {//Size have lock, may have perf problem.
   // And will hang when the lock was removed
   //   ;
@@ -202,7 +205,7 @@ void BoxPSAsynDenseTable::PullDense(const platform::Place& place,
     Variable* var = scope.FindVar(param_name);
     LoDTensor* tensor = var->GetMutable<LoDTensor>();
     TensorCopy(*static_cast<const Tensor*>(&ps_[i]), place,
-        static_cast<Tensor*>(tensor));
+               static_cast<Tensor*>(tensor));
 
     // float *p = (*ps_)[i].mutable_data<float>(platform::CPUPlace());
     // VLOG(0) << "pull dense for " << (*async_param_list_)[i] << ", and the
@@ -210,9 +213,9 @@ void BoxPSAsynDenseTable::PullDense(const platform::Place& place,
   }
 }
 void BoxPSAsynDenseTable::PushDense(const platform::Place& place,
-    const Scope& scope) {
+                                    const Scope& scope) {
   int device_id = boost::get<platform::CUDAPlace>(place).GetDeviceId();
-  auto &grad = device_grads_[device_id];
+  auto& grad = device_grads_[device_id];
   for (size_t i = 0; i < async_param_list_.size(); ++i) {
     if (i % 3 != 0) {
       continue;
@@ -224,7 +227,7 @@ void BoxPSAsynDenseTable::PushDense(const platform::Place& place,
     LoDTensor* tensor = var->GetMutable<LoDTensor>();
     // VLOG(0) << "the first element of grad_name is: " << tmp;
     TensorCopy(*static_cast<const Tensor*>(tensor), platform::CPUPlace(),
-        static_cast<Tensor*>(&grad[i / 3]));
+               static_cast<Tensor*>(&grad[i / 3]));
   }
   ps_buffer_->Send(&grad);
 }
@@ -233,7 +236,7 @@ void BoxPSWorker::Initialize(const TrainerDesc& desc) {
   dev_ctx_ = platform::DeviceContextPool::Instance().Get(place_);
 }
 
-void BoxPSWorker::SetDenseTable(BoxPSAsynDenseTable *dense) {
+void BoxPSWorker::SetDenseTable(BoxPSAsynDenseTable* dense) {
   dense_table_ = dense;
   dense_table_->ReShape(place_);
 }
@@ -264,13 +267,12 @@ void BoxPSWorker::CreateDeviceResource(const ProgramDesc& main_prog) {
     std::string name = var->Name();
     if (!var->Persistable()) {
       auto* ptr = thread_scope_->Var(name);
-//      printf("init tensor var name: %s\n", var->Name().c_str());
+      //      printf("init tensor var name: %s\n", var->Name().c_str());
       InitializeVariable(ptr, var->GetType());
     } else {
       const LoDTensor& root_tensor =
           root_scope_->FindVar(name)->Get<LoDTensor>();
-      LoDTensor* gpu_tensor = thread_scope_->Var(name)
-                                  ->GetMutable<LoDTensor>();
+      LoDTensor* gpu_tensor = thread_scope_->Var(name)->GetMutable<LoDTensor>();
       TensorCopy(*static_cast<const Tensor*>(&root_tensor), place_,
                  static_cast<Tensor*>(gpu_tensor));
     }
@@ -285,8 +287,7 @@ int BoxPSWorker::PackBatchTask(void) {
 /**
  * @brief add auc monitor
  */
-inline
-void AddAucMonitor(const Scope *scope, const platform::Place &place) {
+inline void AddAucMonitor(const Scope* scope, const platform::Place& place) {
   auto box_ptr = BoxWrapper::GetInstance();
   auto& metric_list = box_ptr->GetMetricList();
   for (auto iter = metric_list.begin(); iter != metric_list.end(); iter++) {
@@ -311,23 +312,80 @@ void BoxPSWorker::TrainFiles() {
   while ((batch_size = PackBatchTask()) > 0) {
     VLOG(3) << "begin running ops, batch size:" << batch_size;
     if (dense_table_) {
-        dense_table_->PullDense(place_, *thread_scope_);
+      dense_table_->PullDense(place_, *thread_scope_);
     }
     for (auto& op : ops_) {
       op->Run(*thread_scope_, place_);
     }
     if (dense_table_) {
-        dense_table_->PushDense(place_, *thread_scope_);
+      dense_table_->PushDense(place_, *thread_scope_);
     }
     AddAucMonitor(thread_scope_, place_);
 
     accum_num += batch_size;
-//    thread_scope_->DropKids();
+    thread_scope_->DropKids();
   }
   dev_ctx_->Wait();
   thread_scope_->DropKids();
 }
+/**
+static
+void print_hbm_mem(const int gpu_id, const char *name = "") {
+    size_t hbm_free = 0;
+    size_t hbm_total = 0;
+    platform::GpuMemoryUsage(&hbm_free, &hbm_total);
 
+    VLOG(0) << "hbm usage:("
+            << name << "), device_id: "
+            << gpu_id << " total_size: "
+            << (hbm_total >> 20) << "MB, "
+            << "free: " << (hbm_free >> 20) << " MB, "
+            << "used: " << ((hbm_total - hbm_free) >> 20) << "MB";
+}
+
+class GPUOpMemStat {
+public:
+    GPUOpMemStat(int device_id) :
+        device_id_(device_id),
+        start_mem_used_(0),
+        end_mem_used_(0) {
+
+    }
+
+    void start(void) {
+        start_mem_used_ = get_used_mem();
+    }
+
+    void stop(void) {
+        end_mem_used_ = get_used_mem();
+    }
+
+    void print(const std::string &name) {
+        size_t used_mem = ((end_mem_used_ - start_mem_used_) >> 20);
+        if (used_mem == 0) {
+            return;
+        }
+        VLOG(0) << "hbm usage:(" << name << "), "
+                << "device_id: " << device_id_
+                << " before: " << (start_mem_used_ >> 20) << "MB, "
+                << "after: " << (end_mem_used_ >> 20) << " MB, "
+                << "used: " << used_mem << "MB";
+    }
+
+private:
+    size_t get_used_mem(void) {
+        size_t hbm_free = 0;
+        size_t hbm_total = 0;
+        platform::GpuMemoryUsage(&hbm_free, &hbm_total);
+        return (hbm_total - hbm_free);
+    }
+
+private:
+    int device_id_;
+    size_t start_mem_used_;
+    size_t end_mem_used_;
+};
+*/
 void BoxPSWorker::TrainFilesWithProfiler() {
   VLOG(3) << "begin section_worker TrainFiles with profiler";
   AutoSetCPUAffinity(true);
@@ -355,6 +413,10 @@ void BoxPSWorker::TrainFilesWithProfiler() {
   platform::Timer timeline;
   device_reader_->Start();
 
+  //  print_hbm_mem(device_id_, "BoxPSWorker");
+  //
+  //  GPUOpMemStat op_mem(device_id_);
+
   outer_timer.Start();
   while (true) {
     main_timer.Resume();
@@ -363,7 +425,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     batch_size = PackBatchTask();
     reader_timer.Pause();
     if (batch_size <= 0) {
-        break;
+      break;
     }
     VLOG(3) << "begin running ops, read batch size: " << batch_size;
 
@@ -371,11 +433,14 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     int op_id = 0;
     dev_ctx_->Wait();
     for (auto& op : ops_) {
+      //      op_mem.start();
       timeline.Start();
       op->Run(*thread_scope_, place_);
       dev_ctx_->Wait();
       timeline.Pause();
       op_total_time[op_id++] += timeline.ElapsedUS();
+      //      op_mem.stop();
+      //      op_mem.print(op->Type());
     }
     dev_ctx_->Wait();
     cal_timer.Pause();
@@ -388,7 +453,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     if (need_dump_param_ && device_id_ == 0) {
       DumpParam(*thread_scope_, step_cnt);
     }
-//    thread_scope_->DropKids();
+    thread_scope_->DropKids();
     ++step_cnt;
     accum_num += batch_size;
     main_timer.Pause();
@@ -403,8 +468,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
 
   LOG(ERROR) << "log_for_profile"
              << " card:" << device_id_ << " thread:" << thread_id_
-             << " step_count:" << step_cnt
-             << " batch_count:" << accum_num
+             << " step_count:" << step_cnt << " batch_count:" << accum_num
              << " read_time:" << reader_timer.ElapsedUS()
              << " trans_time:" << trans_timer.ElapsedUS()
              << " cal_time:" << cal_timer.ElapsedUS()

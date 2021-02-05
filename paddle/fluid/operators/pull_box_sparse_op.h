@@ -15,10 +15,12 @@
 #pragma once
 #include <memory>
 #include <vector>
+
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/tensor.h"
+#include "paddle/fluid/operators/math/math_function.h"
 
 namespace paddle {
 namespace operators {
@@ -30,10 +32,14 @@ static void PaddingZeros(const framework::ExecutionContext &ctx,
   // set data
   data->Resize({1, hidden_size});
   data->mutable_data<T>(ctx.GetPlace());
-  auto data_eigen = framework::EigenVector<T>::Flatten(*data);
-  auto &place = *ctx.template device_context<platform::CUDADeviceContext>()
-                     .eigen_device();
-  data_eigen.device(place) = data_eigen.constant(static_cast<T>(0));
+
+  auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+  math::set_constant(dev_ctx, data, 0);
+
+  //  auto data_eigen = framework::EigenVector<T>::Flatten(*data);
+  //  auto &place = *ctx.template device_context<platform::CUDADeviceContext>()
+  //                     .eigen_device();
+  //  data_eigen.device(place) = data_eigen.constant(static_cast<T>(0));
 
   // set lod
   std::vector<size_t> v_lod(batch_size + 1, 1);
@@ -45,19 +51,41 @@ static void PaddingZeros(const framework::ExecutionContext &ctx,
 
 template <typename T>
 static void PullCacheValuesFunctor(const framework::ExecutionContext &ctx) {
-  const auto* input = ctx.Input<framework::LoDTensor>("Id");
-  auto* output = ctx.Output<framework::LoDTensor>("Out");
+  const auto *input = ctx.Input<framework::LoDTensor>("Id");
+  auto *output = ctx.Output<framework::LoDTensor>("Out");
 
   auto batch_size = input->dims()[0];
 
-  uint64_t* input_data = reinterpret_cast<uint64_t*>(const_cast<int64_t*>(input->data<int64_t>()));
-  float* output_data = const_cast<float*>(output->mutable_data<float>(ctx.GetPlace()));
+  uint64_t *input_data = reinterpret_cast<uint64_t *>(
+      const_cast<int64_t *>(input->data<int64_t>()));
+  float *output_data =
+      const_cast<float *>(output->mutable_data<float>(ctx.GetPlace()));
 
 #ifdef PADDLE_WITH_BOX_PS
   auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
   int i = BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
 
-  box_ptr->gpu_replica_cache.front().PullCacheValue(input_data, output_data, batch_size, i);
+  box_ptr->gpu_replica_cache.front().PullCacheValue(input_data, output_data,
+                                                    batch_size, i);
+#endif
+}
+
+template <typename T>
+static void LookupInputFunctor(const framework::ExecutionContext &ctx) {
+  const auto *input = ctx.Input<framework::LoDTensor>("Id");
+  auto *output = ctx.Output<framework::LoDTensor>("Out");
+  auto batch_size = input->dims()[0];
+  uint64_t *input_data = reinterpret_cast<uint64_t *>(
+      const_cast<int64_t *>(input->data<int64_t>()));
+  float *output_data =
+      const_cast<float *>(output->mutable_data<float>(ctx.GetPlace()));
+
+#ifdef PADDLE_WITH_BOX_PS
+  auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+  size_t device_id =
+      BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
+  box_ptr->input_table_deque_.front().LookupInput(input_data, output_data,
+                                                  batch_size, device_id);
 #endif
 }
 
@@ -178,5 +206,14 @@ class PushBoxSparseCPUKernel : public framework::OpKernel<T> {
     PushBoxSparseFunctor<T>(ctx);
   }
 };
+
+template <typename T>
+class LookupInputCPUKernel : public framework::OpKernel<T> {
+ public:
+  void Compute(const framework::ExecutionContext &ctx) const override {
+    LookupInputFunctor<T>(ctx);
+  }
+};
+
 }  // namespace operators
 }  // namespace paddle
