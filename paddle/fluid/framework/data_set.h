@@ -242,21 +242,6 @@ class DatasetImpl : public Dataset {
   virtual void SetFleetSendSleepSeconds(int seconds);
   virtual std::vector<T>& GetInputRecord() { return input_records_; }
 
-  virtual std::set<uint16_t> GetSlotsIdx(
-      const std::set<std::string>& str_slots) {
-    std::set<uint16_t> slots_idx;
-
-    auto multi_slot_desc = data_feed_desc_.multi_slot_desc();
-    for (int i = 0; i < multi_slot_desc.slots_size(); ++i) {
-      std::string cur_slot = multi_slot_desc.slots(i).name();
-      if (str_slots.find(cur_slot) != str_slots.end()) {
-        slots_idx.insert(i);
-      }
-    }
-
-    return slots_idx;
-  }
-
  protected:
   virtual int ReceiveFromClient(int msg_type, int client_id,
                                 const std::string& msg);
@@ -376,7 +361,7 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
   virtual int64_t GetShuffleDataSize() { return input_records_.size(); }
   // merge ins from multiple sources and unroll
   virtual void UnrollInstance();
-
+  virtual void ReceiveSuffleData(const int client_id, const char* msg, int len);
 
   // pre load
   virtual void LoadIndexIntoMemory() {}
@@ -388,14 +373,29 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
   virtual void ShuffleData(int thread_num = -1);
 
  public:
-  virtual void ReceiveSuffleData(const int client_id, const char* msg, int len);
-
- public:
   void SetPSAgent(boxps::PSAgentBase* agent) { p_agent_ = agent; }
   boxps::PSAgentBase* GetPSAgent(void) { return p_agent_; }
   double GetReadInsTime(void) { return max_read_ins_span_; }
   double GetOtherTime(void) { return other_timer_.ElapsedSec(); }
   double GetMergeTime(void) { return max_merge_ins_span_; }
+  // aucrunner
+  std::set<uint16_t> GetSlotsIdx(const std::set<std::string>& str_slots) {
+    std::set<uint16_t> slots_idx;
+    uint16_t idx = 0;
+    auto multi_slot_desc = data_feed_desc_.multi_slot_desc();
+    for (int i = 0; i < multi_slot_desc.slots_size(); ++i) {
+      auto slot = multi_slot_desc.slots(i);
+      if (!slot.is_used() || slot.type().at(0) != 'u') {
+        continue;
+      }
+      if (str_slots.find(slot.name()) != str_slots.end()) {
+        slots_idx.insert(idx);
+      }
+      ++idx;
+    }
+
+    return slots_idx;
+  }
 
  protected:
   void MergeInsKeys(const Channel<SlotRecord>& in);
@@ -437,6 +437,7 @@ class InputTableDataset : public PadBoxSlotDataset {
     index_filelist_ = filelist;
   }
   virtual void LoadIndexIntoMemory();
+
  private:
   std::vector<std::string> index_filelist_;
 };

@@ -142,6 +142,27 @@ __global__ void FusedCVMKernelWithCVM(const size_t N, T **output_values,
     }
   }
 }
+// join only need show input
+template <typename T>
+__global__ void FusedCVMKernelWithShow(const size_t N, T **output_values,
+                                       T **seqpool_output_values,
+                                       const int batch_size,
+                                       const int embedding_size,
+                                       const int noclk_embedding_size) {
+  CUDA_KERNEL_LOOP(i, N) {
+    int key = i / noclk_embedding_size;
+    int offset = i % noclk_embedding_size;
+    int x = key / batch_size;  // slot id
+    int y = key % batch_size;  // ins id
+    if (offset == 0) {         // show
+      *(output_values[x] + y * noclk_embedding_size) =
+          log(*(seqpool_output_values[x] + y * embedding_size) + 1);
+    } else {  // skip click offset + 1
+      *(output_values[x] + y * noclk_embedding_size + offset) =
+          *(seqpool_output_values[x] + y * embedding_size + offset + 1);
+    }
+  }
+}
 // update not need show click input
 template <typename T>
 __global__ void FusedCVMKernelNoCVM(const size_t N, T **output_values,
@@ -170,7 +191,8 @@ void FusedSeqpoolCVM(const paddle::platform::Place &place,
                      const int slot_num, const int embedding_size,
                      const float padding_value, const bool use_cvm,
                      const int cvm_offset, float need_filter, float show_coeff,
-                     float clk_coeff, float threshold, const int quant_ratio) {
+                     float clk_coeff, float threshold, const int quant_ratio,
+                     const bool clk_filter) {
   auto stream = dynamic_cast<platform::CUDADeviceContext *>(
                     platform::DeviceContextPool::Instance().Get(
                         BOOST_GET_CONST(platform::CUDAPlace, place)))
@@ -221,9 +243,18 @@ void FusedSeqpoolCVM(const paddle::platform::Place &place,
   }
   // second log
   if (use_cvm) {
-    FusedCVMKernelWithCVM<<<GET_BLOCK(N), PADDLE_CUDA_NUM_THREADS, 0, stream>>>(
-        N, gpu_output_values, gpu_seqpool_output_values, batch_size,
-        embedding_size, cvm_offset);
+    if (clk_filter) {  // skip click
+      N = static_cast<size_t>(batch_size * slot_num * (embedding_size - 1));
+      FusedCVMKernelWithShow<<<GET_BLOCK(N), PADDLE_CUDA_NUM_THREADS, 0,
+                               stream>>>(N, gpu_output_values,
+                                         gpu_seqpool_output_values, batch_size,
+                                         embedding_size, embedding_size - 1);
+    } else {
+      FusedCVMKernelWithCVM<<<GET_BLOCK(N), PADDLE_CUDA_NUM_THREADS, 0,
+                              stream>>>(N, gpu_output_values,
+                                        gpu_seqpool_output_values, batch_size,
+                                        embedding_size, cvm_offset);
+    }
   } else {
     // not need show click input
     N = static_cast<size_t>(batch_size * slot_num *
@@ -357,6 +388,7 @@ class FusedSeqpoolCVMCUDAKernel : public framework::OpKernel<T> {
     float threshold = ctx.Attr<float>("threshold");
     const int cvm_offset = ctx.Attr<int>("cvm_offset");
     const int quant_ratio = ctx.Attr<int>("quant_ratio");
+    bool clk_filter = ctx.Attr<bool>("clk_filter");
 
     int embedding_size = inputs[0]->numel() / inputs[0]->dims()[0];
     int batch_size = -1;
@@ -376,7 +408,11 @@ class FusedSeqpoolCVMCUDAKernel : public framework::OpKernel<T> {
       input_data[i] = reinterpret_cast<const T *>(input->data<T>());
       auto *output = outputs[i];
       if (use_cvm) {
-        output->Resize({batch_size, embedding_size});
+        if (clk_filter) {
+          output->Resize({batch_size, embedding_size - 1});
+        } else {
+          output->Resize({batch_size, embedding_size});
+        }
       } else {
         output->Resize({batch_size, embedding_size - cvm_offset});
       }
@@ -391,7 +427,8 @@ class FusedSeqpoolCVMCUDAKernel : public framework::OpKernel<T> {
     FusedSeqpoolCVM(ctx.GetPlace(), input_data, output_data,
                     seqpool_output_data, lods_data, batch_size, slot_size,
                     embedding_size, padding_value, use_cvm, cvm_offset,
-                    need_filter, show_coeff, clk_coeff, threshold, quant_ratio);
+                    need_filter, show_coeff, clk_coeff, threshold, quant_ratio,
+                    clk_filter);
   }
 };
 

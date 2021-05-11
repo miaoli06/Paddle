@@ -1119,27 +1119,20 @@ class BoxWrapper {
       random_ins_pool_list[i].Resize(pool_size);
     }
 
-    std::unordered_set<std::string> slot_set;
+    slot_eval_set_.clear();
     for (size_t i = 0; i < slot_eval.size(); ++i) {
       for (const auto& slot : slot_eval[i]) {
-        slot_set.insert(slot);
+        slot_eval_set_.insert(slot);
       }
     }
-    for (size_t i = 0; i < slot_list.size(); ++i) {
-      if (slot_set.find(slot_list[i]) != slot_set.end()) {
-        slot_index_to_replace_.insert(static_cast<uint16_t>(i));
-      }
-    }
-    for (int i = 0; i < auc_runner_thread_num_; ++i) {
-      random_ins_pool_list[i].SetReplacedSlots(slot_index_to_replace_);
-    }
+
     VLOG(0) << "AucRunner configuration: thread number[" << thread_num
             << "], pool size[" << pool_size << "], runner_group[" << phase_num_
-            << "]";
-    VLOG(0) << "Slots that need to be evaluated:";
-    for (auto e : slot_index_to_replace_) {
-      VLOG(0) << e << ": " << slot_list[e];
-    }
+            << "], eval size:[" << slot_eval_set_.size() << "]";
+    //    VLOG(0) << "Slots that need to be evaluated:";
+    //    for (auto e : slot_index_to_replace_) {
+    //      VLOG(0) << e << ": " << slot_list[e];
+    //    }
   }
   void GetRandomReplace(std::vector<SlotRecord>* records);
   void PostUpdate();
@@ -1184,15 +1177,23 @@ class BoxWrapper {
   void RecordReplaceBack(std::vector<SlotRecord>* records,
                          const std::set<uint16_t>& slots);
 
+  // aucrunner
+  void SetReplacedSlots(const std::set<uint16_t>& slot_index_to_replace) {
+    for (int i = 0; i < auc_runner_thread_num_; ++i) {
+      random_ins_pool_list[i].SetReplacedSlots(slot_index_to_replace);
+    }
+  }
+  const std::set<std::string>& GetEvalSlotSet() { return slot_eval_set_; }
+
  private:
   int mode_ = 0;  // 0 means train/test 1 means auc_runner
   int auc_runner_thread_num_ = 1;
   bool init_done_ = false;
   paddle::framework::Channel<int> pass_done_semi_;
 
-  std::set<uint16_t> slot_index_to_replace_;
   std::vector<FeasignValuesCandidateList> random_ins_pool_list;
   std::mutex mutex4random_pool_;
+  std::set<std::string> slot_eval_set_;
 };
 /**
  * @brief file mgr
@@ -1250,7 +1251,23 @@ class BoxHelper {
     }
 #endif
   }
-
+#ifdef PADDLE_WITH_BOX_PS
+  void LoadAucRunnerData(PadBoxSlotDataset* dataset,
+                         boxps::PSAgentBase* agent) {
+    auto box_ptr = BoxWrapper::GetInstance();
+    // init random pool slots replace
+    static bool slot_init = false;
+    if (!slot_init) {
+      slot_init = true;
+      auto slots_set = dataset->GetSlotsIdx(box_ptr->GetEvalSlotSet());
+      box_ptr->SetReplacedSlots(slots_set);
+    }
+    box_ptr->AddReplaceFeasign(agent, box_ptr->GetFeedpassThreadNum());
+    auto& records = dataset->GetInputRecord();
+    box_ptr->PushAucRunnerResource(records.size());
+    box_ptr->GetRandomReplace(&records);
+  }
+#endif
   void ReadData2Memory() {
     platform::Timer timer;
     VLOG(3) << "Begin ReadData2Memory(), dataset[" << dataset_ << "]";
@@ -1287,10 +1304,7 @@ class BoxHelper {
     timer.Start();
     // auc runner
     if (box_ptr->Mode() == 1) {
-      box_ptr->AddReplaceFeasign(agent, box_ptr->GetFeedpassThreadNum());
-      auto& records = dataset->GetInputRecord();
-      box_ptr->PushAucRunnerResource(records.size());
-      box_ptr->GetRandomReplace(&records);
+      LoadAucRunnerData(dataset, agent);
     }
     box_ptr->EndFeedPass(agent);
 #endif
@@ -1350,10 +1364,7 @@ class BoxHelper {
     auto box_ptr = BoxWrapper::GetInstance();
     // auc runner
     if (box_ptr->Mode() == 1) {
-      box_ptr->AddReplaceFeasign(agent, box_ptr->GetFeedpassThreadNum());
-      auto& records = dataset->GetInputRecord();
-      box_ptr->PushAucRunnerResource(records.size());
-      box_ptr->GetRandomReplace(&records);
+      LoadAucRunnerData(dataset, agent);
     }
     box_ptr->EndFeedPass(agent);
     timer.Pause();

@@ -39,6 +39,8 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
     const size_t num_inputs = ins_dims.size();
     std::vector<framework::DDim> outs_dims;
     outs_dims.resize(num_inputs);
+    bool use_cvm = ctx->Attrs().Get<bool>("use_cvm");
+    bool clk_filter = ctx->Attrs().Get<bool>("clk_filter");
 
     // need filter quant_ratio more than zero
     if (ctx->Attrs().Get<bool>("need_filter")) {
@@ -66,7 +68,7 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
     for (size_t i = 0; i < num_inputs; ++i) {
       const auto dims = ins_dims[i];
       int rank = dims.size();
-      if (ctx->Attrs().Get<bool>("use_cvm")) {
+      if (use_cvm) {
         PADDLE_ENFORCE_GT(
             dims[rank - 1], 2,
             "Shape error in %lu id, the last dimension(embedding) of the "
@@ -75,8 +77,12 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
       }
       // input lod is not accessible here
       std::vector<int64_t> out_dim;
-      if (ctx->Attrs().Get<bool>("use_cvm")) {
-        out_dim = {-1, dims[rank - 1]};
+      if (use_cvm) {
+        if (clk_filter) {
+          out_dim = {-1, dims[rank - 1] - 1};
+        } else {
+          out_dim = {-1, dims[rank - 1]};
+        }
       } else {
         out_dim = {-1, dims[rank - 1] - cvm_offset};
       }
@@ -122,6 +128,7 @@ class FusedSeqpoolCVMOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<float>("threshold", "(float, default 0.96)").SetDefault(0.96);
     AddAttr<int>("cvm_offset", "(int, default 2)").SetDefault(2);
     AddAttr<int>("quant_ratio", "(int, default 128)").SetDefault(0);
+    AddAttr<bool>("clk_filter", "(bool, default false)").SetDefault(false);
 
     AddComment(R"DOC(
 Fuse multiple pairs of Sequence Pool and CVM Operator.
@@ -139,6 +146,8 @@ class FusedSeqpoolCVMGradOp : public framework::OperatorWithKernel {
     auto x_dims = ctx->GetInputsDim("X");
     auto cvm_dims = ctx->GetInputDim("CVM");
     const int cvm_offset = ctx->Attrs().Get<int>("cvm_offset");
+    bool use_cvm = ctx->Attrs().Get<bool>("use_cvm");
+    bool clk_filter = ctx->Attrs().Get<bool>("clk_filter");
 
     PADDLE_ENFORCE_EQ(
         cvm_dims.size(), 2,
@@ -151,9 +160,13 @@ class FusedSeqpoolCVMGradOp : public framework::OperatorWithKernel {
               "The rank of output grad must equal to Input(X). But "
               "received: input rank %u, input shape [%s].",
               og_dims[i].size(), og_dims[i]));
-      if (ctx->Attrs().Get<bool>("use_cvm")) {
+      if (use_cvm) {
+        auto o_dim = og_dims[i][og_dims[i].size() - 1];
+        if (clk_filter) {  // filter clk need + 1
+          o_dim = o_dim + 1;
+        }
         PADDLE_ENFORCE_EQ(
-            og_dims[i][og_dims[i].size() - 1], x_dims[i][og_dims[i].size() - 1],
+            o_dim, x_dims[i][og_dims[i].size() - 1],
             platform::errors::InvalidArgument(
                 "The dimension mismatch between Input(OUT@GRAD) and "
                 "Input(X). Received Input(OUT@GRAD): input rank %u, "
