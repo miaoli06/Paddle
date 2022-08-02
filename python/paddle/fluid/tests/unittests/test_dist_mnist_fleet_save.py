@@ -23,12 +23,13 @@ paddle.enable_static()
 
 
 class TestDistMnistFleetSave(TestDistBase):
+
     def _setup_config(self):
         self._sync_mode = True
         self._use_reduce = False
         self._use_reader_alloc = False
         self._nccl2_mode = True
-        self._gpu_fleet_api = True
+        self._use_fleet_api = True
         self._save_model = True
 
     def _rm_temp_files(self, dirname):
@@ -89,8 +90,8 @@ class TestDistMnistFleetSave(TestDistBase):
         tr0_losses, tr1_losses = self._run_cluster_nccl2(
             model_file,
             required_envs,
-            False,
-            check_error_log,
+            update_method='nccl2',
+            check_error_log=check_error_log,
             log_name=log_name)
 
         dirname = '/tmp'

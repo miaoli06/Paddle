@@ -22,10 +22,10 @@ namespace paddle {
 namespace framework {
 
 void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
-                                   const std::vector<const uint64_t*>& keys,
-                                   const std::vector<float*>& values,
-                                   const std::vector<int64_t>& slot_lengths,
-                                   const int hidden_size,
+                                const std::vector<const uint64_t*>& keys,
+                                const std::vector<float*>& values,
+                                const std::vector<int64_t>& slot_lengths,
+                                const int hidden_size,
                                    const int expand_embed_dim,
                                    const int skip_offset, bool expand_only) {
   //  VLOG(3) << "Begin PullSparse";
@@ -36,7 +36,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
   platform::Timer& pull_dedup_timer = dev.pull_dedup_timer;
   all_timer.Resume();
 
-  // construct slot_level lod info
+    // construct slot_level lod info
   std::vector<int64_t> slot_lengths_lod;
   slot_lengths_lod.push_back(0);
 
@@ -45,7 +45,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
   for (int i = 0; i < slot_num; i++) {
     total_length += slot_lengths[i];
     slot_lengths_lod.push_back(total_length);
-  }
+    }
   dev.total_key_length = total_length;
 
   auto ctx = platform::DeviceContextPool::Instance().Get(
@@ -172,11 +172,11 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
 }
 
 void BoxWrapper::PullSparseCaseCPU(const paddle::platform::Place& place,
-                                   const std::vector<const uint64_t*>& keys,
+    const std::vector<const uint64_t*>& keys,
                                    const std::vector<float*>& values,
-                                   const std::vector<int64_t>& slot_lengths,
-                                   const int hidden_size,
-                                   const int expand_embed_dim,
+    const std::vector<int64_t>& slot_lengths,
+    const int hidden_size,
+    const int expand_embed_dim,
                                    const int skip_offset, bool expand_only) {
   //  VLOG(3) << "Begin PullSparse";
   int device_id = GetPlaceDeviceId(place);
@@ -197,7 +197,7 @@ void BoxWrapper::PullSparseCaseCPU(const paddle::platform::Place& place,
   }
   dev.total_key_length = total_length;
 
-  uint64_t* total_keys =
+    uint64_t* total_keys =
       reinterpret_cast<uint64_t*>(dev.keys_tensor.mutable_data<int64_t>(
           {static_cast<int64_t>(total_length * 2), 1}, place));
   int* key2slot = reinterpret_cast<int*>(dev.keys2slot.mutable_data<int>(

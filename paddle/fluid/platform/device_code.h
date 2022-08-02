@@ -25,6 +25,10 @@ limitations under the License. */
 #include "paddle/fluid/platform/dynload/cuda_driver.h"
 #include "paddle/fluid/platform/dynload/nvrtc.h"
 #endif
+#ifdef PADDLE_WITH_HIP
+#include "paddle/fluid/platform/dynload/hiprtc.h"
+#include "paddle/fluid/platform/dynload/rocm_driver.h"
+#endif
 
 namespace paddle {
 namespace platform {
@@ -44,10 +48,11 @@ class DeviceCode {
   std::string kernel_;
 };
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 class CUDADeviceCode : public DeviceCode {
  public:
-  explicit CUDADeviceCode(const Place& place, const std::string& name,
+  explicit CUDADeviceCode(const Place& place,
+                          const std::string& name,
                           const std::string& kernel);
   bool Compile(bool include_path = false) override;
   void Launch(const size_t n, std::vector<void*>* args) const override;
@@ -61,7 +66,11 @@ class CUDADeviceCode : public DeviceCode {
   static bool IsAvailable() { return available_; }
 
  private:
+#ifdef PADDLE_WITH_HIP
+  bool CheckNVRTCResult(hiprtcResult result, std::string function);
+#else
   bool CheckNVRTCResult(nvrtcResult result, std::string function);
+#endif
 
   static bool available_;
 
@@ -70,8 +79,13 @@ class CUDADeviceCode : public DeviceCode {
   int num_threads_{1024};
   int workload_per_thread_{1};
   std::vector<char> ptx_;
+#ifdef PADDLE_WITH_HIP
+  hipModule_t module_;
+  hipFunction_t function_;
+#else
   CUmodule module_;
   CUfunction function_;
+#endif
 };
 #endif
 

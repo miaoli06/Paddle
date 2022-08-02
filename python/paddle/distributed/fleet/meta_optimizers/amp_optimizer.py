@@ -14,8 +14,11 @@
 import paddle.fluid.contrib.mixed_precision as mixed_precision
 from .meta_optimizer_base import MetaOptimizerBase
 
+__all__ = []
+
 
 class AMPOptimizer(MetaOptimizerBase):
+
     def __init__(self, optimizer):
         super(AMPOptimizer, self).__init__(optimizer)
         self.inner_opt = optimizer
@@ -25,15 +28,15 @@ class AMPOptimizer(MetaOptimizerBase):
             "LarsOptimizer",
             "LambOptimizer",
             "RecomputeOptimizer",
-            "GradientMergeOptimizer",
             "GraphExecutionOptimizer",
         ]
         self.meta_optimizers_black_list = ["DGCOptimizer"]
 
     def _set_basic_info(self, loss, role_maker, user_defined_optimizer,
                         user_defined_strategy):
-        super(AMPOptimizer, self)._set_basic_info(
-            loss, role_maker, user_defined_optimizer, user_defined_strategy)
+        super(AMPOptimizer,
+              self)._set_basic_info(loss, role_maker, user_defined_optimizer,
+                                    user_defined_strategy)
 
     def _init_wrapped_opt(self):
         if self.wrapped_opt is not None:
@@ -51,7 +54,8 @@ class AMPOptimizer(MetaOptimizerBase):
             self.inner_opt, amp_lists, config['init_loss_scaling'],
             config['incr_every_n_steps'], config['decr_every_n_nan_or_inf'],
             config['incr_ratio'], config['decr_ratio'],
-            config['use_dynamic_loss_scaling'])
+            config['use_dynamic_loss_scaling'], config['use_pure_fp16'],
+            config['use_fp16_guard'])
 
         # if worker_num > 1, all cards will communication with each other,
         # add is_distributed to optimize amp, overlap communication and
@@ -59,6 +63,7 @@ class AMPOptimizer(MetaOptimizerBase):
         is_distributed = self.role_maker._worker_num() > 1
         if self.user_defined_strategy.sharding:
             # FIXME(wangxi). sharding failed when split check_finite_and_unscale
+            # FIXME(JZ-LIANG). To support Sharding-Megatron-AMP, Megatron should follow Sharding's behavior that to disable is_distributed.
             is_distributed = False
         self.wrapped_opt._set_distributed(is_distributed)
 
@@ -100,8 +105,9 @@ class AMPOptimizer(MetaOptimizerBase):
         return self.wrapped_opt.apply_gradients(params_grads=params_grads)
 
     def apply_optimize(self, loss, startup_program, params_grads):
-        return self.wrapped_opt.apply_optimize(
-            loss, startup_program=startup_program, params_grads=params_grads)
+        return self.wrapped_opt.apply_optimize(loss,
+                                               startup_program=startup_program,
+                                               params_grads=params_grads)
 
     def minimize_impl(self,
                       loss,
@@ -113,3 +119,14 @@ class AMPOptimizer(MetaOptimizerBase):
             self.wrapped_opt.minimize(loss, startup_program,
                                   parameter_list, no_grad_set)
         return optimize_ops, params_grads
+
+    def amp_init(self,
+                 place,
+                 scope=None,
+                 test_program=None,
+                 use_fp16_test=False):
+        return self.wrapped_opt.amp_init(place, scope, test_program,
+                                         use_fp16_test)
+
+    def get_loss_scaling(self):
+        return self.wrapped_opt.get_loss_scaling()

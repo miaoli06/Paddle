@@ -12,10 +12,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/mean_op.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
+
+#include "paddle/fluid/framework/infershape_utils.h"
+#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/phi/core/infermeta_utils.h"
+#include "paddle/phi/infermeta/unary.h"
 
 namespace paddle {
 namespace operators {
@@ -162,10 +166,19 @@ DECLARE_NO_NEED_BUFFER_VARS_INFERER(MaskMeanGradNoNeedBufferVarsInferer, "X");
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OPERATOR(mean, ops::MeanOp, ops::MeanOpMaker, ops::MeanOpInferVarType,
+DECLARE_INFER_SHAPE_FUNCTOR(mean,
+                            MeanInferShapeFunctor,
+                            PD_INFER_META(phi::MeanAllInferMeta));
+REGISTER_OPERATOR(mean,
+                  ops::MeanOp,
+                  ops::MeanOpMaker,
+                  ops::MeanOpInferVarType,
                   ops::MeanGradMaker<paddle::framework::OpDesc>,
-                  ops::MeanGradMaker<paddle::imperative::OpBase>);
-REGISTER_OPERATOR(mean_grad, ops::MeanGradOp,
+                  ops::MeanGradMaker<paddle::imperative::OpBase>,
+                  MeanInferShapeFunctor);
+
+REGISTER_OPERATOR(mean_grad,
+                  ops::MeanGradOp,
                   ops::MeanGradNoNeedBufferVarsInferer);
 REGISTER_OP_CPU_KERNEL(
     mean, ops::MeanKernel<paddle::platform::CPUDeviceContext, float>,

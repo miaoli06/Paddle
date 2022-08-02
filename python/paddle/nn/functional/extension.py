@@ -14,15 +14,21 @@
 
 # TODO: define the extention functions
 
-__all__ = ['diag_embed', 'row_conv']
-
 import numpy as np
 from ...fluid.data_feeder import check_dtype
 from ...fluid.layer_helper import LayerHelper
-from ...fluid.framework import Variable, in_dygraph_mode
-from ...fluid.layers.tensor import assign
-from ...fluid import core, dygraph_utils
-from ...fluid.layers.layer_function_generator import templatedoc
+from ...static import Variable
+from ...tensor.creation import assign
+from ...fluid import dygraph_utils
+from ...tensor.layer_function_generator import templatedoc
+from paddle import in_dynamic_mode
+from paddle import _C_ops
+from ...fluid.framework import _non_static_mode, _in_legacy_dygraph, in_dygraph_mode
+from ...fluid.data_feeder import check_variable_and_dtype, check_type
+from ...framework import core
+from ...common_ops_import import convert_np_dtype_to_dtype_
+
+__all__ = []
 
 
 def diag_embed(input, offset=0, dim1=-2, dim2=-1):
@@ -92,11 +98,17 @@ def diag_embed(input, offset=0, dim1=-2, dim2=-1):
             #  [[ 0.        ,  0.        ,  0.        ,  0.        ],
             #   [ 0.        ,  0.        ,  0.        ,  0.        ]]]
     """
-    inputs = {'Input': [input]}
-    attrs = {'offset': offset, 'dim1': dim1, 'dim2': dim2}
-
     if not isinstance(input, Variable):
         input = assign(input)
+
+    if in_dygraph_mode():
+        return _C_ops.final_state_diag_embed(input, offset, dim1, dim2)
+    elif in_dynamic_mode():
+        return _C_ops.diag_embed(input, "offset", offset, "dim1", dim1, "dim2",
+                                 dim2)
+
+    inputs = {'Input': [input]}
+    attrs = {'offset': offset, 'dim1': dim1, 'dim2': dim2}
 
     def __check_input(input, offset, dim1, dim2):
         check_dtype(input.dtype, 'Input',
@@ -123,79 +135,260 @@ def diag_embed(input, offset=0, dim1=-2, dim2=-1):
                "dim1 and dim2 cannot be the same dimension." \
                 "But received dim1 = %d, dim2 = %d\n"%(dim1, dim2)
 
-    if not in_dygraph_mode():
-        __check_input(input, offset, dim1, dim2)
+    __check_input(input, offset, dim1, dim2)
     helper = LayerHelper("diag_embed", **locals())
 
     out = helper.create_variable_for_type_inference(dtype=input.dtype)
 
-    helper.append_op(
-        type='diag_embed',
-        inputs={'Input': [input]},
-        attrs={'offset': offset,
-               'dim1': dim1,
-               'dim2': dim2},
-        outputs={'Out': [out]})
+    helper.append_op(type='diag_embed',
+                     inputs={'Input': [input]},
+                     attrs={
+                         'offset': offset,
+                         'dim1': dim1,
+                         'dim2': dim2
+                     },
+                     outputs={'Out': [out]})
     out.stop_gradient = True
     return out
 
 
-@templatedoc()
-def row_conv(input, weight, act=None):
-    """
+def sequence_mask(x, maxlen=None, dtype='int64', name=None):
+    r"""
+    **SequenceMask Layer**
 
-    ${comment}
+    This layer outputs a mask according to the input :code:`x` and
+    :code:`maxlen` with data type of :code:`dtype`.
+
+    Supposing :code:`x` is a Tensor with shape [d_1, d_2, ..., d_n], the
+    :code:`y` is a mask with shape [d_1, d_2, ..., d_n, maxlen], where:
+
+    .. math::
+
+        y(i_1, i_2,..., i_n, j) = (j < x(i_1, i_2,..., i_n))
+
+    .. code-block:: text
+
+        Case:
+
+        Consider input:
+            x = [3, 1, 1, 0]    max_len = 4
+
+        then we get out:
+            mask = [[1, 1, 1, 0],
+                    [1, 0, 0, 0],
+                    [1, 0, 0, 0],
+                    [0, 0, 0, 0]]
 
     Args:
-        input (Tensor):  the input(X) is a LodTensor or tensor, LodTensor(X) 
-            supports variable time-length input sequences. The underlying 
-            tensor in this LoDTensor is a matrix with shape (T, D), where 
-            T is the total time steps in this mini-batch and D is the input 
-            data dimension. 
-            If the input is a padded minibatch, the shape of the input is 
-            (N, T, D), N is batch size, T is the max time steps in the batch,
-             D is the input data dimension.
-        weight (Tensor): The weight. A Tensor with shape 
-            (future_context_size + 1, D), where future_context_size is the 
-            context size of the RowConv operator.
-        act (str): Non-linear activation to be applied to output variable.
+        x (Variable): Input tensor of sequence_mask layer, \
+            whose elements are integers less than :code:`maxlen`. \
+            Tensor or LodTensor with shape [d_1, d_2, ..., d_n].
+        maxlen (int, optional): Maximum length of the sequence. If :code:`maxlen` \
+                           is None, it would be replace with :math:`max(x)`.
+        dtype (np.dtype|paddle.dtype|str, optional): Data type of the output, \
+             ``int64`` by default.
+        name(str, optional): For detailed information, please refer \
+            to :ref:`api_guide_Name`. Usually name is no need to set and \
+            None by default.
 
-    Returns:
-        ${out_comment}.
+    Returns: The output sequence mask. Tensor with shape [d_1, d_2, ..., d_n, maxlen] \
+            and data type of :code:`dtype`. The data type should be bool, float32, float64, int8, \
+            int32 or int64.
+
+    Return Type: Tensor
 
     Examples:
         .. code-block:: python
 
-            from paddle import fluid, nn
-            import paddle.nn.functional as F
-            import numpy as np
+            import paddle
 
-            batch_size = 4
-            time_steps = 8
-            feature_size = 6
-            context_size = 4
-            x = np.random.randn(batch_size, time_steps, feature_size).astype(np.float32)
-            weight = np.random.randn(context_size + 1, feature_size).astype(np.float32)
+            lengths = paddle.to_tensor([10, 9, 8])
+            mask = paddle.nn.functional.sequence_mask(lengths)
 
-            x_var = paddle.to_tensor(x)
-            w_var = paddle.to_tensor(weight)
-            y_var = F.extension.row_conv(x_var, w_var)
-            print(y_var.shape)
+            print(mask.numpy())
+            # [[1 1 1 1 1 1 1 1 1 1]
+            #  [1 1 1 1 1 1 1 1 1 0]
+            #  [1 1 1 1 1 1 1 1 0 0]]
 
-            # [4, 8, 6]
     """
 
     if in_dygraph_mode():
-        pre_act = core.ops.row_conv(input, weight)
-        out = dygraph_utils._append_activation_in_dygraph(pre_act, act)
-        return out
-    else:
-        helper = LayerHelper('row_conv', **locals())
-        dtype = helper.input_dtype()
+        if not isinstance(dtype, core.VarDesc.VarType):
+            dtype = convert_np_dtype_to_dtype_(dtype)
+        if maxlen is not None:
+            if isinstance(maxlen, core.eager.Tensor):
+                attrs = ('out_dtype', dtype)
+                out = _C_ops.sequence_mask(x, maxlen, *attrs)
+            else:
+                attrs = ('out_dtype', dtype, 'maxlen', maxlen)
+                out = _C_ops.sequence_mask(x, None, *attrs)
+            out.stop_gradient = True
+            return out
 
-        inputs = {'X': [input], 'Filter': [weight]}
-        pre_act = helper.create_variable_for_type_inference(dtype)
-        outputs = {'Out': [pre_act]}
-        helper.append_op(type='row_conv', inputs=inputs, outputs=outputs)
-        out = helper.append_activation(pre_act)
+    helper = LayerHelper('sequence_mask', **locals())
+    out = helper.create_variable_for_type_inference(dtype=dtype)
+
+    inputs = {'X': [x]}
+    attrs = {'out_dtype': out.dtype}
+    if maxlen is not None:
+        if isinstance(maxlen, Variable):
+            inputs['MaxLenTensor'] = maxlen
+        else:
+            attrs['maxlen'] = maxlen
+
+    helper.append_op(type='sequence_mask',
+                     inputs=inputs,
+                     outputs={'Y': out},
+                     attrs=attrs)
+
+    out.stop_gradient = True
+    return out
+
+
+def gather_tree(ids, parents):
+    r"""
+    To be used after beam search. After beam search, we get selected ids at
+    each time step and the corresponding parents in the search tree. Both ids
+    and parents have the layout :attr:`[max_time, batch_size, beam_size]`. Then
+    :attr:`gather_tree` is used to backtrace from the last time step and
+    generate the full sequences by collecting selected ids.
+
+    Here is an example:
+
+    .. code-block:: text
+
+            Given:
+                ids = [[[2 2]
+                        [6 1]]
+                       [[3 9]
+                        [6 1]]
+                       [[0 1]
+                        [9 0]]]
+                parents = [[[0 0]
+                            [1 1]]
+                           [[1 0]
+                            [1 0]]
+                           [[0 0]
+                            [0 1]]]
+
+            Then:
+                gather_tree(ids, parents)
+                         = [[[2 2]
+                             [1 6]]
+                            [[3 3]
+                             [6 1]]
+                            [[0 1]
+                             [9 0]]]
+
+    Args:
+        ids(Tensor): A Tensor with shape :attr:`[length, batch_size, beam_size]`
+            and data type :attr:`int32` or :attr:`int64`. It contains the selected
+            ids of all time steps.
+        parents(Tensor): A Tensor with the same shape and data type as :attr:`ids`,
+            It contains the parents corresponding to selected ids when searching
+            among beams.
+
+    Returns:
+            A Tensor with the same shape and data type as :attr:`ids`. \
+            It contains the full sequences. The sequences are collected from \
+            :attr:`ids` by backtracing according to :attr:`parents`.
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+
+            ids = paddle.to_tensor([[[2, 2], [6, 1]], [[3, 9], [6, 1]], [[0, 1], [9, 0]]])
+
+            parents = paddle.to_tensor([[[0, 0], [1, 1]], [[1, 0], [1, 0]], [[0, 0], [0, 1]]])
+
+            final_sequences = paddle.nn.functional.gather_tree(ids, parents)
+            # [[[2, 2], [1, 6]], [[3, 3], [6, 1]], [[0, 1], [9, 0]]]
+
+    """
+    if in_dygraph_mode():
+        return _C_ops.final_state_gather_tree(ids, parents)
+    else:
+        if _in_legacy_dygraph():
+            return _C_ops.gather_tree(ids, parents)
+        else:
+            helper = LayerHelper('gather_tree', **locals())
+            check_variable_and_dtype(ids, 'ids', ['int32', 'int64'],
+                                     'gather_tree')
+            check_variable_and_dtype(parents, 'parents', ['int32', 'int64'],
+                                     'gather_tree')
+            out = helper.create_variable_for_type_inference(dtype=ids.dtype)
+
+            helper.append_op(type="gather_tree",
+                             inputs={
+                                 "Ids": ids,
+                                 "Parents": parents
+                             },
+                             outputs={"Out": out})
+
+            return out
+
+
+@templatedoc()
+def temporal_shift(x, seg_num, shift_ratio=0.25, name=None, data_format="NCHW"):
+    """
+
+    **Temporal Shift Operator**
+
+    ${comment}
+
+    Args:
+        x(Tensor): ${x_comment}
+        seg_num(int): ${seg_num_comment}
+        shift_ratio(float): ${shift_ratio_comment}
+        name(str, optional): For detailed information, please refer
+                             to :ref:`api_guide_Name`. Usually name is no need to set and
+                             None by default.
+        data_format(str, optional): Data format that specifies the layout of input.
+            It can be "NCHW" or "NHWC". Default: "NCHW".
+
+    Returns:
+        out(Tensor): The temporal shifting result is a tensor with the
+        same shape and same data type as the input.
+
+    Raises:
+        TypeError: seg_num must be int type.
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+            import paddle.nn.functional as F
+
+            input = paddle.randn([6, 4, 2, 2])
+            out = F.temporal_shift(x=input, seg_num=2, shift_ratio=0.2)
+    """
+    if data_format not in ["NCHW", "NHWC"]:
+        raise ValueError("Attr(data_format) should be 'NCHW' or 'NHWC'. "
+                         "Received Attr(data_format): {}.".format(data_format))
+    if in_dygraph_mode():
+        return _C_ops.final_state_temporal_shift(x, seg_num, shift_ratio,
+                                                 data_format)
+    if _non_static_mode():
+        return _C_ops.temporal_shift(x, 'seg_num', seg_num, 'shift_ratio',
+                                     shift_ratio, 'data_format', data_format)
+
+    helper = LayerHelper("temporal_shift", **locals())
+    check_variable_and_dtype(x, 'x', ['float32', 'float64'], 'temporal_shift')
+    check_type(seg_num, 'seg_num', int, 'temporal_shift')
+    check_type(shift_ratio, 'shift_ratio', float, 'temporal_shift')
+
+    out = helper.create_variable_for_type_inference(dtype=x.dtype)
+
+    if not isinstance(seg_num, int):
+        raise TypeError("seg_num must be int type.")
+
+    helper.append_op(type="temporal_shift",
+                     inputs={"X": x},
+                     outputs={"Out": out},
+                     attrs={
+                         "seg_num": seg_num,
+                         "shift_ratio": shift_ratio,
+                         "data_format": data_format
+                     })
     return out

@@ -13,23 +13,18 @@
 // limitations under the License.
 
 #include "paddle/fluid/operators/sequence_ops/sequence_concat_op.h"
+
 #include "paddle/fluid/framework/op_registry.h"
 
-namespace paddle {
-namespace platform {
-class CUDADeviceContext;
-}  // namespace platform
-}  // namespace paddle
-
-template <typename T>
-using Kernel =
-    paddle::operators::SeqConcatKernel<paddle::platform::CUDADeviceContext, T>;
-REGISTER_OP_CUDA_KERNEL(sequence_concat, Kernel<float>, Kernel<double>,
-                        Kernel<int>, Kernel<int64_t>);
-template <typename T>
-using GradKernel =
-    paddle::operators::SeqConcatGradKernel<paddle::platform::CUDADeviceContext,
-                                           T>;
-REGISTER_OP_CUDA_KERNEL(sequence_concat_grad, GradKernel<float>,
-                        GradKernel<double>, GradKernel<int>,
-                        GradKernel<int64_t>);
+REGISTER_OP_CUDA_KERNEL(
+    sequence_concat,
+    paddle::operators::SeqConcatKernel<phi::GPUContext, float>,
+    paddle::operators::SeqConcatKernel<phi::GPUContext, double>,
+    paddle::operators::SeqConcatKernel<phi::GPUContext, int>,
+    paddle::operators::SeqConcatKernel<phi::GPUContext, int64_t>);
+REGISTER_OP_CUDA_KERNEL(
+    sequence_concat_grad,
+    paddle::operators::SeqConcatGradKernel<phi::GPUContext, float>,
+    paddle::operators::SeqConcatGradKernel<phi::GPUContext, double>,
+    paddle::operators::SeqConcatGradKernel<phi::GPUContext, int>,
+    paddle::operators::SeqConcatGradKernel<phi::GPUContext, int64_t>);

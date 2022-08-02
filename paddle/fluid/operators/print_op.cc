@@ -13,12 +13,16 @@
    limitations under the License. */
 
 #include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/operators/tensor_formatter.h"
+
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace framework {
 class InferShapeContext;
-class LoDTensor;
 class OpDesc;
 class Scope;
 }  // namespace framework
@@ -40,7 +44,8 @@ const char kBoth[] = "BOTH";
 // TODO(ChunweiYan) there should be some other printers for TensorArray
 class PrintOp : public framework::OperatorBase {
  public:
-  PrintOp(const std::string &type, const framework::VariableNameMap &inputs,
+  PrintOp(const std::string &type,
+          const framework::VariableNameMap &inputs,
           const framework::VariableNameMap &outputs,
           const framework::AttributeMap &attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
@@ -52,11 +57,13 @@ class PrintOp : public framework::OperatorBase {
     auto out_var = scope.FindVar(Output("Out"));
 
     PADDLE_ENFORCE_NOT_NULL(
-        in_var, platform::errors::NotFound("The input:%s not found in scope",
-                                           Input("In")));
+        in_var,
+        platform::errors::NotFound("The input:%s not found in scope",
+                                   Input("In")));
     PADDLE_ENFORCE_NOT_NULL(
-        out_var, platform::errors::NotFound("The output:%s not found in scope",
-                                            Output("Out")));
+        out_var,
+        platform::errors::NotFound("The output:%s not found in scope",
+                                   Output("Out")));
 
     auto &in_tensor = in_var->Get<framework::LoDTensor>();
     framework::LoDTensor *out_tensor =
@@ -71,15 +78,8 @@ class PrintOp : public framework::OperatorBase {
                   const std::string &printed_var_name,
                   const framework::LoDTensor &in_tensor) const {
     std::string print_phase = Attr<std::string>("print_phase");
-    std::string file_path = Attr<std::string>("out_path");
-#ifdef PADDLE_WITH_CUDA
-    int device = Attr<int>("device");
-    if (device >= 0 &&
-        device != boost::get<platform::CUDAPlace>(place).GetDeviceId()) {
-      return;
-    }
-#endif
     bool is_forward = Attr<bool>("is_forward");
+
     if ((is_forward && print_phase == kBackward) ||
         (!is_forward && print_phase == kForward)) {
       return;
@@ -96,7 +96,7 @@ class PrintOp : public framework::OperatorBase {
     formatter.SetPrintTensorLod(Attr<bool>("print_tensor_lod"));
     formatter.SetPrintTensorLayout(Attr<bool>("print_tensor_layout"));
     formatter.SetSummarize(static_cast<int64_t>(Attr<int>("summarize")));
-    formatter.Print(file_path, in_tensor, name, Attr<std::string>("message"));
+    formatter.Print(in_tensor, name, Attr<std::string>("message"));
   }
 
  private:
@@ -127,11 +127,10 @@ class PrintOpProtoAndCheckMaker : public framework::OpProtoAndCheckerMaker {
                          "including 'FORWARD' "
                          "'BACKWARD' and 'BOTH'.")
         .SetDefault(std::string(kBoth))
-        .InEnum({std::string(kForward), std::string(kBackward),
+        .InEnum({std::string(kForward),
+                 std::string(kBackward),
                  std::string(kBoth)});
     AddAttr<bool>("is_forward", "Whether is forward or not").SetDefault(true);
-    AddAttr<std::string>("out_path", "which out path file print");
-    AddAttr<int>("device", "which deivce id print");
     AddComment(R"DOC(
 Creates a print op that will print when a tensor is accessed.
 
@@ -178,7 +177,16 @@ class PrintOpGradientMaker : public framework::SingleGradOpMaker<T> {
 
 namespace ops = paddle::operators;
 
-REGISTER_OPERATOR(print, ops::PrintOp, ops::PrintOpProtoAndCheckMaker,
+REGISTER_OPERATOR(print,
+                  ops::PrintOp,
+                  ops::PrintOpProtoAndCheckMaker,
                   ops::PrintOpGradientMaker<paddle::framework::OpDesc>,
                   ops::PrintOpGradientMaker<paddle::imperative::OpBase>,
-                  ops::PrintOpInferShape, ops::PrintOpVarTypeInference);
+                  ops::PrintOpInferShape,
+                  ops::PrintOpVarTypeInference);
+
+REGISTER_OP_VERSION(print).AddCheckpoint(
+    R"ROC(Upgrade print add a new attribute [print_tensor_layout] to "
+             "contorl whether to print tensor's layout.)ROC",
+    paddle::framework::compatible::OpVersionDesc().NewAttr(
+        "print_tensor_layout", "Whether to print the tensor's layout.", true));

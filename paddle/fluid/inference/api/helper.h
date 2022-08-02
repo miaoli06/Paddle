@@ -15,6 +15,7 @@
 #pragma once
 
 #include <glog/logging.h>
+
 #include <fstream>
 #if !defined(_WIN32)
 #include <sys/time.h>
@@ -31,8 +32,8 @@
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/inference/api/paddle_inference_api.h"
 #include "paddle/fluid/platform/enforce.h"
-#include "paddle/fluid/platform/port.h"
 #include "paddle/fluid/string/printf.h"
+#include "paddle/phi/backends/dynload/port.h"
 
 extern std::string paddle::framework::DataTypeToString(
     const framework::proto::VarType::Type type);
@@ -56,6 +57,26 @@ constexpr PaddleDType PaddleTensorGetDType<int64_t>() {
 template <>
 constexpr PaddleDType PaddleTensorGetDType<float>() {
   return PaddleDType::FLOAT32;
+}
+
+inline PaddleDType ConvertToPaddleDType(
+    paddle::framework::proto::VarType::Type type) {
+  if (type == paddle::framework::proto::VarType::FP32) {
+    return PaddleDType::FLOAT32;
+  } else if (type == paddle::framework::proto::VarType::INT64) {
+    return PaddleDType::INT64;
+  } else if (type == paddle::framework::proto::VarType::INT32) {
+    return PaddleDType::INT32;
+  } else if (type == paddle::framework::proto::VarType::UINT8) {
+    return PaddleDType::UINT8;
+  } else {
+    PADDLE_THROW(paddle::platform::errors::Unimplemented(
+        "The paddle dtype convert function only supports FLOAT32, INT64, INT32 "
+        "and UINT8 now. But "
+        "we get %d here.",
+        static_cast<int>(type)));
+    return PaddleDType::FLOAT32;
+  }
 }
 
 using paddle::framework::DataTypeToString;
@@ -82,8 +103,10 @@ static int GetUniqueId() {
   return id++;
 }
 
-static void split(const std::string &str, char sep,
-                  std::vector<std::string> *pieces, bool ignore_null = true) {
+static void split(const std::string &str,
+                  char sep,
+                  std::vector<std::string> *pieces,
+                  bool ignore_null = true) {
   pieces->clear();
   if (str.empty()) {
     if (!ignore_null) {
@@ -130,33 +153,42 @@ static T convert(const std::string &item,
   return res;
 }
 
-static void split_to_float(const std::string &str, char sep,
+static void split_to_float(const std::string &str,
+                           char sep,
                            std::vector<float> *fs) {
   std::vector<std::string> pieces;
   split(str, sep, &pieces);
-  std::transform(pieces.begin(), pieces.end(), std::back_inserter(*fs),
+  std::transform(pieces.begin(),
+                 pieces.end(),
+                 std::back_inserter(*fs),
                  [](const std::string &v) {
                    return convert<float>(v, [](const std::string &item) {
                      return std::stof(item);
                    });
                  });
 }
-static void split_to_int64(const std::string &str, char sep,
+static void split_to_int64(const std::string &str,
+                           char sep,
                            std::vector<int64_t> *is) {
   std::vector<std::string> pieces;
   split(str, sep, &pieces);
-  std::transform(pieces.begin(), pieces.end(), std::back_inserter(*is),
+  std::transform(pieces.begin(),
+                 pieces.end(),
+                 std::back_inserter(*is),
                  [](const std::string &v) {
                    return convert<int64_t>(v, [](const std::string &item) {
                      return std::stoll(item);
                    });
                  });
 }
-static void split_to_int(const std::string &str, char sep,
+static void split_to_int(const std::string &str,
+                         char sep,
                          std::vector<int> *is) {
   std::vector<std::string> pieces;
   split(str, sep, &pieces);
-  std::transform(pieces.begin(), pieces.end(), std::back_inserter(*is),
+  std::transform(pieces.begin(),
+                 pieces.end(),
+                 std::back_inserter(*is),
                  [](const std::string &v) {
                    return convert<int>(v, [](const std::string &item) {
                      return std::stoi(item);
@@ -192,13 +224,16 @@ void CheckAssignedData(const std::vector<std::vector<T>> &data,
     num += (*it).size();
   }
   PADDLE_ENFORCE_EQ(
-      num, num_elems,
+      num,
+      num_elems,
       platform::errors::OutOfRange(
           "The number of elements out of bounds. "
           "Expected number of elements = %d. But received %d. Suggested Fix: "
           "If the tensor is expected to assign %d elements, check the number "
           "of elements of your 'infer_data'.",
-          num_elems, num, num_elems));
+          num_elems,
+          num,
+          num_elems));
 }
 
 template <typename T>
@@ -353,12 +388,18 @@ static std::string DescribeZeroCopyTensor(const ZeroCopyTensor &tensor) {
   return os.str();
 }
 
-static void PrintTime(int batch_size, int repeat, int num_threads, int tid,
-                      double batch_latency, int epoch = 1,
+static void PrintTime(int batch_size,
+                      int repeat,
+                      int num_threads,
+                      int tid,
+                      double batch_latency,
+                      int epoch = 1,
                       const framework::proto::VarType::Type data_type =
                           framework::proto::VarType::FP32) {
-  PADDLE_ENFORCE_GT(batch_size, 0, platform::errors::InvalidArgument(
-                                       "Non-positive batch size."));
+  PADDLE_ENFORCE_GT(
+      batch_size,
+      0,
+      platform::errors::InvalidArgument("Non-positive batch size."));
   double sample_latency = batch_latency / batch_size;
   LOG(INFO) << "====== threads: " << num_threads << ", thread id: " << tid
             << " ======";
@@ -377,6 +418,8 @@ static bool IsFileExists(const std::string &path) {
   file.close();
   return exists;
 }
+
+void RegisterAllCustomOperator();
 
 }  // namespace inference
 }  // namespace paddle

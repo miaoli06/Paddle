@@ -44,35 +44,35 @@ class PullBoxExtendedSparseOp : public framework::OperatorWithKernel {
     auto expand_only = ctx->Attrs().Get<bool>("expand_only");
     auto flags = ctx->Attrs().Get<std::vector<int>>("mask");
     if (flags.empty()) {
-      for (size_t i = 0; i < n_ids; ++i) {
-        const auto ids_dims = all_ids_dim[i];
-        int ids_rank = ids_dims.size();
+    for (size_t i = 0; i < n_ids; ++i) {
+      const auto ids_dims = all_ids_dim[i];
+      int ids_rank = ids_dims.size();
         PADDLE_ENFORCE_EQ(
             ids_dims[ids_rank - 1], 1,
-            platform::errors::InvalidArgument(
-                "Shape error in %lu id, the last dimension of the "
-                "'Ids' tensor must be 1.",
-                i));
+                        platform::errors::InvalidArgument(
+                            "Shape error in %lu id, the last dimension of the "
+                            "'Ids' tensor must be 1.",
+                            i));
         auto out_dim = framework::vectorize(
             framework::slice_ddim(ids_dims, 0, ids_rank - 1));
-        out_dim.push_back(emb_size);
+      out_dim.push_back(emb_size);
         outs_dims.push_back(framework::make_ddim(out_dim));
         auto out_extended_dim = framework::vectorize(
             framework::slice_ddim(ids_dims, 0, ids_rank - 1));
         if (expand_only) {
-          out_extended_dim.push_back(emb_extended_size);
+      out_extended_dim.push_back(emb_extended_size);
         } else {
           out_extended_dim.push_back(emb_size + emb_extended_size);
-        }
+    }
         outs_extended_dims.push_back(framework::make_ddim(out_extended_dim));
       }
-      ctx->SetOutputsDim("Out", outs_dims);
-      ctx->SetOutputsDim("OutExtend", outs_extended_dims);
+    ctx->SetOutputsDim("Out", outs_dims);
+    ctx->SetOutputsDim("OutExtend", outs_extended_dims);
 
-      for (size_t i = 0; i < n_ids; ++i) {
-        ctx->ShareLoD("Ids", "Out", i, i);
-        ctx->ShareLoD("Ids", "OutExtend", i, i);
-      }
+    for (size_t i = 0; i < n_ids; ++i) {
+      ctx->ShareLoD("Ids", "Out", i, i);
+      ctx->ShareLoD("Ids", "OutExtend", i, i);
+    }
     } else {
       for (size_t i = 0; i < n_ids; ++i) {
         const auto ids_dims = all_ids_dim[i];
@@ -88,7 +88,7 @@ class PullBoxExtendedSparseOp : public framework::OperatorWithKernel {
               framework::slice_ddim(ids_dims, 0, ids_rank - 1));
           out_dim.push_back(emb_size);
           outs_dims.push_back(framework::make_ddim(out_dim));
-        }
+  }
         if (flags[i] & 0x02) {
           auto out_extended_dim = framework::vectorize(
               framework::slice_ddim(ids_dims, 0, ids_rank - 1));

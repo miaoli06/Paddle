@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-#include "paddle/fluid/framework/dim.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/phi/core/utils/dim.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
 namespace operators {
@@ -68,7 +68,7 @@ __global__ void expand_rank_attention_param_kernel(
     const T* input, int input_row, int input_col, const int* rank_offset,
     int rank_offset_row, int rank_offset_col, const T* param, int param_row,
     int param_col, T* output_param, int output_param_row, int output_param_col,
-    int max_rank) {
+                                                   int max_rank) {
   CUDA_KERNEL_LOOP(idx, output_param_row * output_param_col) {
     int output_col_idx = idx % output_param_col;
     int output_row_idx = idx / output_param_col;

@@ -14,11 +14,12 @@ limitations under the License. */
 
 #ifdef PADDLE_WITH_XPU
 
-#include "paddle/fluid/operators/uniform_random_op.h"
 #include <string>
+
 #include "paddle/fluid/framework/generator.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
+#include "paddle/fluid/operators/uniform_random_op.h"
 
 namespace paddle {
 namespace operators {
@@ -41,16 +42,16 @@ class XPUUniformRandomKernel : public framework::OpKernel<T> {
       }
     }
 
-    if (out_var->IsType<framework::SelectedRows>()) {
-      auto *selected_rows = out_var->GetMutable<framework::SelectedRows>();
+    if (out_var->IsType<phi::SelectedRows>()) {
+      auto *selected_rows = out_var->GetMutable<phi::SelectedRows>();
       tensor = selected_rows->mutable_value();
       auto shape = ctx.Attr<std::vector<int64_t>>("shape");
       if (!new_shape.empty()) shape = new_shape;
-      tensor->Resize(framework::make_ddim(shape));
+      tensor->Resize(phi::make_ddim(shape));
       selected_rows->mutable_rows()->reserve(shape[0]);
     } else if (out_var->IsType<framework::LoDTensor>()) {
       tensor = out_var->GetMutable<framework::LoDTensor>();
-      if (!new_shape.empty()) tensor->Resize(framework::make_ddim(new_shape));
+      if (!new_shape.empty()) tensor->Resize(phi::make_ddim(new_shape));
     } else {
       PADDLE_THROW(platform::errors::InvalidArgument(
           "Expected type of Output(out) in uniform_random_op must be Tensor, "
@@ -79,20 +80,26 @@ class XPUUniformRandomKernel : public framework::OpKernel<T> {
     auto diag_val = static_cast<T>(ctx.Attr<float>("diag_val"));
     if (diag_num > 0) {
       PADDLE_ENFORCE_GT(
-          size, (diag_num - 1) * (diag_step + 1),
+          size,
+          (diag_num - 1) * (diag_step + 1),
           platform::errors::InvalidArgument(
               "ShapeInvalid: the diagonal's elements is equal (num-1) "
               "* (step-1) with num %d, step %d,"
               "It should be smaller than %d, but received %d",
-              diag_num, diag_step, (diag_num - 1) * (diag_step + 1), size));
+              diag_num,
+              diag_step,
+              (diag_num - 1) * (diag_step + 1),
+              size));
       for (int64_t i = 0; i < diag_num; ++i) {
         int64_t pos = i * diag_step + i;
         data_cpu[pos] = diag_val;
       }
     }
 
-    memory::Copy(BOOST_GET_CONST(platform::XPUPlace, ctx.GetPlace()), data,
-                 platform::CPUPlace(), reinterpret_cast<void *>(data_cpu.get()),
+    memory::Copy(ctx.GetPlace(),
+                 data,
+                 platform::CPUPlace(),
+                 reinterpret_cast<void *>(data_cpu.get()),
                  size * sizeof(T));
   }
 };

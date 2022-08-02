@@ -16,16 +16,19 @@ from __future__ import print_function
 
 import numpy as np
 from functools import partial, reduce
+import paddle
 from paddle.utils import deprecated
 from . import nn
 from .layer_function_generator import templatedoc
 from ..layer_helper import LayerHelper
-from ..framework import Variable, in_dygraph_mode, static_only
+from ..framework import Variable, _non_static_mode, static_only, _in_legacy_dygraph, in_dygraph_mode
 from .. import core
 from ..data_feeder import check_variable_and_dtype, check_type
 from ..param_attr import ParamAttr
 from ..initializer import NumpyArrayInitializer, Constant
 from .. import core
+import warnings
+from paddle import _C_ops
 
 __all__ = [
     'center_loss',
@@ -111,8 +114,9 @@ def center_loss(input,
     check_variable_and_dtype(label, 'label', ['int32', 'int64'], 'center_loss')
 
     centers_shape = [num_classes, input.shape[1]]
-    centers_param = helper.create_parameter(
-        attr=param_attr, shape=centers_shape, dtype=dtype)
+    centers_param = helper.create_parameter(attr=param_attr,
+                                            shape=centers_shape,
+                                            dtype=dtype)
     centers_param.stop_gradient = True
 
     if isinstance(alpha, Variable):
@@ -132,21 +136,22 @@ def center_loss(input,
 
     centersdiff = helper.create_variable_for_type_inference(dtype=input.dtype)
     loss = helper.create_variable_for_type_inference(dtype=input.dtype)
-    helper.append_op(
-        type='center_loss',
-        inputs={
-            'X': [input],
-            'Label': [label],
-            'Centers': [centers_param],
-            'CenterUpdateRate': [alpha_param]
-        },
-        outputs={
-            'SampleCenterDiff': [centersdiff],
-            'Loss': [loss],
-            'CentersOut': [centers_param]
-        },
-        attrs={'cluster_num': num_classes,
-               'need_update': update_center})
+    helper.append_op(type='center_loss',
+                     inputs={
+                         'X': [input],
+                         'Label': [label],
+                         'Centers': [centers_param],
+                         'CenterUpdateRate': [alpha_param]
+                     },
+                     outputs={
+                         'SampleCenterDiff': [centersdiff],
+                         'Loss': [loss],
+                         'CentersOut': [centers_param]
+                     },
+                     attrs={
+                         'cluster_num': num_classes,
+                         'need_update': update_center
+                     })
     return loss
 
 
@@ -194,11 +199,12 @@ def bpr_loss(input, label, name=None):
     out = helper.create_variable_for_type_inference(dtype=input.dtype)
     check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64'],
                              'bpr_loss')
-    helper.append_op(
-        type='bpr_loss',
-        inputs={'X': [input],
-                'Label': [label]},
-        outputs={'Y': [out]})
+    helper.append_op(type='bpr_loss',
+                     inputs={
+                         'X': [input],
+                         'Label': [label]
+                     },
+                     outputs={'Y': [out]})
     return out
 
 
@@ -259,9 +265,9 @@ def cross_entropy(input, label, soft_label=False, ignore_index=kIgnoreIndex):
     if not soft_label:
         return cross_entropy2(input, label, ignore_index)
 
-    if in_dygraph_mode():
-        return core.ops.cross_entropy(input, label, "soft_label", soft_label,
-                                      "ignore_index", ignore_index)
+    if _non_static_mode():
+        return _C_ops.cross_entropy(input, label, "soft_label", soft_label,
+                                    "ignore_index", ignore_index)
 
     inputs = {'X': [input], 'Label': [label]}
     attrs = {"soft_label": soft_label, "ignore_index": ignore_index}
@@ -270,15 +276,17 @@ def cross_entropy(input, label, soft_label=False, ignore_index=kIgnoreIndex):
                              'cross_entropy')
     helper = LayerHelper('cross_entropy', **locals())
     out = helper.create_variable_for_type_inference(dtype=input.dtype)
-    helper.append_op(
-        type='cross_entropy', inputs=inputs, outputs={'Y': [out]}, attrs=attrs)
+    helper.append_op(type='cross_entropy',
+                     inputs=inputs,
+                     outputs={'Y': [out]},
+                     attrs=attrs)
     return out
 
 
 def cross_entropy2(input, label, ignore_index=kIgnoreIndex):
-    if in_dygraph_mode():
-        loss, _, _ = core.ops.cross_entropy2(input, label, 'ignore_index',
-                                             ignore_index)
+    if _non_static_mode():
+        loss, _, _ = _C_ops.cross_entropy2(input, label, 'ignore_index',
+                                           ignore_index)
         return loss
 
     inputs = {'X': [input], 'Label': [label]}
@@ -289,13 +297,14 @@ def cross_entropy2(input, label, ignore_index=kIgnoreIndex):
     out = helper.create_variable_for_type_inference(dtype=input.dtype)
     xshape = helper.create_variable_for_type_inference(dtype=input.dtype)
     match_x = helper.create_variable_for_type_inference(dtype=input.dtype)
-    helper.append_op(
-        type='cross_entropy2',
-        inputs=inputs,
-        outputs={'Y': [out],
-                 'MatchX': [match_x],
-                 'XShape': [xshape]},
-        attrs=attrs)
+    helper.append_op(type='cross_entropy2',
+                     inputs=inputs,
+                     outputs={
+                         'Y': [out],
+                         'MatchX': [match_x],
+                         'XShape': [xshape]
+                     },
+                     attrs=attrs)
     return out
 
 
@@ -333,28 +342,7 @@ def square_error_cost(input, label):
             # [0.01, 0.01]
 
     """
-    if in_dygraph_mode():
-        minus_out = core.ops.elementwise_sub(input, label)
-        square_out = core.ops.square(minus_out)
-        return square_out
-
-    check_variable_and_dtype(input, "input", ['float32', 'float64'],
-                             'square_error_cost')
-    check_variable_and_dtype(label, "label", ['float32', 'float64'],
-                             'square_error_cost')
-    helper = LayerHelper('square_error_cost', **locals())
-    minus_out = helper.create_variable_for_type_inference(dtype=input.dtype)
-    helper.append_op(
-        type='elementwise_sub',
-        inputs={'X': [input],
-                'Y': [label]},
-        outputs={'Out': [minus_out]})
-
-    square_out = helper.create_variable_for_type_inference(dtype=input.dtype)
-    helper.append_op(
-        type='square', inputs={'X': [minus_out]},
-        outputs={'Out': [square_out]})
-    return square_out
+    return paddle.nn.functional.square_error_cost(input, label)
 
 
 def edit_distance(input,
@@ -430,45 +418,9 @@ def edit_distance(input,
             # [4]
 
     """
-    check_variable_and_dtype(input, 'input', ['int64'], 'edit_distance')
-    check_variable_and_dtype(label, 'label', ['int64'], 'edit_distance')
-    helper = LayerHelper("edit_distance", **locals())
-
-    # remove some tokens from input and labels
-    if ignored_tokens is not None and len(ignored_tokens) > 0:
-        erased_input = helper.create_variable_for_type_inference(dtype="int64")
-        erased_label = helper.create_variable_for_type_inference(dtype="int64")
-
-        helper.append_op(
-            type="sequence_erase",
-            inputs={"X": [input]},
-            outputs={"Out": [erased_input]},
-            attrs={"tokens": ignored_tokens})
-        input = erased_input
-
-        helper.append_op(
-            type="sequence_erase",
-            inputs={"X": [label]},
-            outputs={"Out": [erased_label]},
-            attrs={"tokens": ignored_tokens})
-        label = erased_label
-
-    this_inputs = {"Hyps": [input], "Refs": [label]}
-    if input_length is not None and label_length is not None:
-        this_inputs['HypsLength'] = [input_length]
-        this_inputs['RefsLength'] = [label_length]
-
-    # edit distance op
-    edit_distance_out = helper.create_variable_for_type_inference(dtype="int64")
-    sequence_num = helper.create_variable_for_type_inference(dtype="int64")
-    helper.append_op(
-        type="edit_distance",
-        inputs=this_inputs,
-        outputs={"Out": [edit_distance_out],
-                 "SequenceNum": [sequence_num]},
-        attrs={"normalized": normalized})
-
-    return edit_distance_out, sequence_num
+    return paddle.nn.functional.loss.edit_distance(input, label, normalized,
+                                                   ignored_tokens, input_length,
+                                                   label_length)
 
 
 def warpctc(input,
@@ -599,7 +551,16 @@ def warpctc(input,
             raise ValueError(
                 "input_length and label_length must not be None in dygraph mode!"
             )
-        grad, loss_out = core.ops.warpctc(
+        loss_out = _C_ops.final_state_warpctc(input, label, input_length,
+                                              label_length, blank,
+                                              norm_by_times)
+        return loss_out
+    if _non_static_mode():
+        if input_length is None or label_length is None:
+            raise ValueError(
+                "input_length and label_length must not be None in dygraph mode!"
+            )
+        grad, loss_out = _C_ops.warpctc(
             input,
             label,
             input_length,
@@ -607,7 +568,8 @@ def warpctc(input,
             'blank',
             blank,
             'norm_by_times',
-            norm_by_times, )
+            norm_by_times,
+        )
         return loss_out
     helper = LayerHelper('warpctc', **locals())
     check_variable_and_dtype(input, 'input', ['float32', 'float64'], "warpctc")
@@ -624,15 +586,16 @@ def warpctc(input,
     loss_out = helper.create_variable_for_type_inference(dtype=input.dtype)
     grad_out = helper.create_variable_for_type_inference(dtype=input.dtype)
 
-    helper.append_op(
-        type='warpctc',
-        inputs=this_inputs,
-        outputs={'WarpCTCGrad': [grad_out],
-                 'Loss': [loss_out]},
-        attrs={
-            'blank': blank,
-            'norm_by_times': norm_by_times,
-        })
+    helper.append_op(type='warpctc',
+                     inputs=this_inputs,
+                     outputs={
+                         'WarpCTCGrad': [grad_out],
+                         'Loss': [loss_out]
+                     },
+                     attrs={
+                         'blank': blank,
+                         'norm_by_times': norm_by_times,
+                     })
     return loss_out
 
 
@@ -737,18 +700,16 @@ def nce(input,
 
     dim = input.shape[1]
     num_true_class = label.shape[1]
-    w = helper.create_parameter(
-        attr=helper.param_attr,
-        shape=[num_total_classes, dim],
-        is_bias=False,
-        dtype=input.dtype)
+    w = helper.create_parameter(attr=helper.param_attr,
+                                shape=[num_total_classes, dim],
+                                is_bias=False,
+                                dtype=input.dtype)
     inputs = {}
     if helper.bias_attr:
-        b = helper.create_parameter(
-            attr=helper.bias_attr,
-            shape=[num_total_classes, 1],
-            is_bias=True,
-            dtype=input.dtype)
+        b = helper.create_parameter(attr=helper.bias_attr,
+                                    shape=[num_total_classes, 1],
+                                    is_bias=True,
+                                    dtype=input.dtype)
         inputs['Bias'] = b
     cost = helper.create_variable_for_type_inference(dtype=input.dtype)
     sample_logits = helper.create_variable_for_type_inference(dtype=input.dtype)
@@ -846,15 +807,14 @@ def nce(input,
         'remote_prefetch': remote_prefetch
     }
 
-    helper.append_op(
-        type='nce',
-        inputs=inputs,
-        outputs={
-            'Cost': cost,
-            'SampleLogits': sample_logits,
-            'SampleLabels': sample_labels
-        },
-        attrs=attrs)
+    helper.append_op(type='nce',
+                     inputs=inputs,
+                     outputs={
+                         'Cost': cost,
+                         'SampleLogits': sample_logits,
+                         'SampleLabels': sample_labels
+                     },
+                     attrs=attrs)
     return cost / (num_neg_samples + 1)
 
 
@@ -976,17 +936,15 @@ def hsigmoid(input,
         "With sparse mode, if your models has only small parameter prefetch may cause speed down"
     )
     if not is_custom:
-        weights = helper.create_parameter(
-            attr=helper.param_attr,
-            shape=[num_classes - 1, dim],
-            is_bias=False,
-            dtype=input.dtype)
+        weights = helper.create_parameter(attr=helper.param_attr,
+                                          shape=[num_classes - 1, dim],
+                                          is_bias=False,
+                                          dtype=input.dtype)
     else:
-        weights = helper.create_parameter(
-            attr=helper.param_attr,
-            shape=[num_classes, dim],
-            is_bias=False,
-            dtype=input.dtype)
+        weights = helper.create_parameter(attr=helper.param_attr,
+                                          shape=[num_classes, dim],
+                                          is_bias=False,
+                                          dtype=input.dtype)
     inputs = {
         "X": input,
         "W": weights,
@@ -996,30 +954,29 @@ def hsigmoid(input,
     }
     if helper.bias_attr:
         if not is_custom:
-            bias = helper.create_parameter(
-                attr=helper.bias_attr,
-                shape=[num_classes - 1, 1],
-                is_bias=True,
-                dtype=input.dtype)
+            bias = helper.create_parameter(attr=helper.bias_attr,
+                                           shape=[num_classes - 1, 1],
+                                           is_bias=True,
+                                           dtype=input.dtype)
             inputs['Bias'] = bias
         else:
-            bias = helper.create_parameter(
-                attr=helper.bias_attr,
-                shape=[num_classes, 1],
-                is_bias=True,
-                dtype=input.dtype)
+            bias = helper.create_parameter(attr=helper.bias_attr,
+                                           shape=[num_classes, 1],
+                                           is_bias=True,
+                                           dtype=input.dtype)
             inputs['Bias'] = bias
-    helper.append_op(
-        type="hierarchical_sigmoid",
-        inputs=inputs,
-        outputs={"Out": out,
-                 "PreOut": pre_out,
-                 "W_Out": weights},
-        attrs={
-            "num_classes": num_classes,
-            "is_sparse": is_sparse,
-            "remote_prefetch": remote_prefetch
-        })
+    helper.append_op(type="hierarchical_sigmoid",
+                     inputs=inputs,
+                     outputs={
+                         "Out": out,
+                         "PreOut": pre_out,
+                         "W_Out": weights
+                     },
+                     attrs={
+                         "num_classes": num_classes,
+                         "is_sparse": is_sparse,
+                         "remote_prefetch": remote_prefetch
+                     })
     return out
 
 
@@ -1098,6 +1055,25 @@ def sampled_softmax_with_cross_entropy(logits,
             out = fluid.layers.sampled_softmax_with_cross_entropy(
                       logits=fc, label=label, num_samples=25)
     """
+    if _non_static_mode():
+        sample_logits_attrs = ('use_customized_samples', use_customized_samples,
+                               'uniq', True, 'remove_accidental_hits',
+                               remove_accidental_hits, 'num_samples',
+                               num_samples, 'seed', seed)
+        _, _, _, _, sampled_logits_out, sampled_label_out = _C_ops.sample_logits(
+            logits, label, *sample_logits_attrs)
+        depth = num_samples + 1
+        sampled_softlabel_out = _C_ops.one_hot(sampled_label_out, 'depth',
+                                               depth)
+
+        softmax_with_cross_entropy_attrs = ('soft_label', True,
+                                            'numeric_stable_mode', False)
+
+        _, loss = _C_ops.softmax_with_cross_entropy(
+            sampled_logits_out, sampled_softlabel_out,
+            *softmax_with_cross_entropy_attrs)
+        return loss / num_true
+
     helper = LayerHelper('sample_logits', **locals())
     samples = customized_samples if use_customized_samples else helper.create_variable_for_type_inference(
         dtype='int64')
@@ -1111,48 +1087,49 @@ def sampled_softmax_with_cross_entropy(logits,
     logits_dim = helper.create_variable_for_type_inference(dtype=logits.dtype)
     labels_dim = helper.create_variable_for_type_inference(dtype=label.type)
 
-    helper.append_op(
-        type='sample_logits',
-        inputs={
-            'Logits': logits,
-            'Labels': label,
-            'CustomizedSamples': customized_samples,
-            'CustomizedProbabilities': customized_probabilities
-        },
-        outputs={
-            'Samples': samples,
-            'Probabilities': probabilities,
-            'SampledLabels': sampled_label,
-            'SampledLogits': sampled_logits,
-            'LogitsDim': logits_dim,
-            'LabelsDim': labels_dim
-        },
-        attrs={
-            'use_customized_samples': use_customized_samples,
-            'uniq': True,
-            'remove_accidental_hits': remove_accidental_hits,
-            'num_samples': num_samples,
-            'seed': seed
-        })
+    helper.append_op(type='sample_logits',
+                     inputs={
+                         'Logits': logits,
+                         'Labels': label,
+                         'CustomizedSamples': customized_samples,
+                         'CustomizedProbabilities': customized_probabilities
+                     },
+                     outputs={
+                         'Samples': samples,
+                         'Probabilities': probabilities,
+                         'SampledLabels': sampled_label,
+                         'SampledLogits': sampled_logits,
+                         'LogitsDim': logits_dim,
+                         'LabelsDim': labels_dim
+                     },
+                     attrs={
+                         'use_customized_samples': use_customized_samples,
+                         'uniq': True,
+                         'remove_accidental_hits': remove_accidental_hits,
+                         'num_samples': num_samples,
+                         'seed': seed
+                     })
     loss = helper.create_variable_for_type_inference(dtype=logits.dtype)
     softmax = helper.create_variable_for_type_inference(dtype=logits.dtype)
-    helper.append_op(
-        type='one_hot',
-        inputs={'X': sampled_label},
-        attrs={'depth': num_samples + 1},
-        outputs={'Out': sampled_softlabel})
+    helper.append_op(type='one_hot',
+                     inputs={'X': sampled_label},
+                     attrs={'depth': num_samples + 1},
+                     outputs={'Out': sampled_softlabel})
 
-    helper.append_op(
-        type='softmax_with_cross_entropy',
-        inputs={'Logits': sampled_logits,
-                'Label': sampled_softlabel},
-        outputs={'Softmax': softmax,
-                 'Loss': loss},
-        attrs={
-            'soft_label': True,
-            'ignore_index': False,
-            'numeric_stable_mode': False
-        })
+    helper.append_op(type='softmax_with_cross_entropy',
+                     inputs={
+                         'Logits': sampled_logits,
+                         'Label': sampled_softlabel
+                     },
+                     outputs={
+                         'Softmax': softmax,
+                         'Loss': loss
+                     },
+                     attrs={
+                         'soft_label': True,
+                         'ignore_index': False,
+                         'numeric_stable_mode': False
+                     })
     return loss / num_true
 
 
@@ -1257,37 +1234,66 @@ def softmax_with_cross_entropy(logits,
             out = paddle.nn.functional.softmax_with_cross_entropy(logits=x, label=label)
             print(out)
     """
-    if in_dygraph_mode():
-        softmax, loss = core.ops.softmax_with_cross_entropy(
-            logits, label, 'soft_label', soft_label, 'ignore_index',
-            ignore_index, 'numeric_stable_mode', numeric_stable_mode, 'axis',
-            axis)
-        if not return_softmax:
-            return loss
-        else:
-            return loss, softmax
+    return paddle.nn.functional.loss.fluid_softmax_with_cross_entropy(
+        logits, label, soft_label, ignore_index, numeric_stable_mode,
+        return_softmax, axis)
 
-    attrs = {
-        'soft_label': soft_label,
-        'ignore_index': ignore_index,
-        'numeric_stable_mode': numeric_stable_mode,
-        'axis': axis
-    }
-    helper = LayerHelper('softmax_with_cross_entropy', **locals())
-    softmax = helper.create_variable_for_type_inference(dtype=logits.dtype)
-    loss = helper.create_variable_for_type_inference(dtype=logits.dtype)
-    helper.append_op(
-        type='softmax_with_cross_entropy',
-        inputs={'Logits': logits,
-                'Label': label},
-        outputs={'Softmax': softmax,
-                 'Loss': loss},
-        attrs=attrs)
 
-    if return_softmax:
-        return loss, softmax
+def identity_loss(x, reduction="none"):
+    r"""Marks a tensor as being part of the loss calculation for IPU.
 
-    return loss
+    This operator is used to handle on the (final) loss of a model so that
+    it is used as the start of backpropagation.
+
+    When `reduction` is `none`, return raw `Out`.
+    
+    When `reduction` is `mean`, return
+
+    .. math::
+        Out = MEAN(Out)
+
+    When `reduction` is `sum`, return
+
+    .. math::
+        Out = SUM(Out)
+
+    Parameters:
+        x (Variable): The input tensor. The shapes is [N, *], where N is batch size and `*` means any number of
+             additional dimensions. It's data type should be float32, float64 on CPU and float16, float32 on IPU.
+        reduction(str|int, optional): Reduce the loss output. Supported string values are: 'sum', 'mean', 'none'
+                            the corresponding int values are 0, 1, 2 respectively. The default value is "none".
+
+    Returns:
+        Variable: The loss ``Tensor`` with the specified reduction applied.
+
+    Examples:
+
+        .. code-block:: python
+
+            import paddle.fluid as fluid
+            import paddle
+            paddle.enable_static()
+            loss = fluid.data(name="loss", shape=[-1, 1], dtype="float32")
+            out = paddle.incubate.identity_loss(loss, reduction=1)
+    """
+    if isinstance(reduction, str):
+        reduction = {"sum": 0, "mean": 1, "none": 2}.get(reduction.lower())
+        if reduction is None:
+            raise Exception("Unsupported reduction type.")
+
+    if _non_static_mode():
+        return _C_ops.identity_loss(x, "reduction", reduction)
+
+    check_variable_and_dtype(x, 'x', ['float32', 'float64'], "identity_loss")
+    attrs = {'reduction': reduction}
+    helper = LayerHelper('identity_loss', **locals())
+    dtype = helper.input_dtype(input_param_name='x')
+    out = helper.create_variable_for_type_inference(dtype)
+    helper.append_op(type="identity_loss",
+                     inputs={"X": x},
+                     outputs={"Out": out},
+                     attrs=attrs)
+    return out
 
 
 def rank_loss(label, left, right, name=None):
@@ -1344,12 +1350,13 @@ def rank_loss(label, left, right, name=None):
 
     out = helper.create_variable_for_type_inference("float32")
 
-    helper.append_op(
-        type='rank_loss',
-        inputs={"Label": label,
-                "Left": left,
-                "Right": right},
-        outputs={'Out': out})
+    helper.append_op(type='rank_loss',
+                     inputs={
+                         "Label": label,
+                         "Left": left,
+                         "Right": right
+                     },
+                     outputs={'Out': out})
     return out
 
 
@@ -1394,14 +1401,17 @@ def margin_rank_loss(label, left, right, margin=0.1, name=None):
     check_variable_and_dtype(label, 'right', ['float32'], 'margin_rank_loss')
     out = helper.create_variable_for_type_inference(left.dtype)
     act = helper.create_variable_for_type_inference(left.dtype)
-    helper.append_op(
-        type='margin_rank_loss',
-        inputs={"Label": label,
-                "X1": left,
-                "X2": right},
-        outputs={'Out': out,
-                 'Activated': act},
-        attrs={'margin': margin})
+    helper.append_op(type='margin_rank_loss',
+                     inputs={
+                         "Label": label,
+                         "X1": left,
+                         "X2": right
+                     },
+                     outputs={
+                         'Out': out,
+                         'Activated': act
+                     },
+                     attrs={'margin': margin})
     return out
 
 
@@ -1445,6 +1455,10 @@ def sigmoid_cross_entropy_with_logits(x,
                                                             ignore_index=-1, normalize=True)
             print(loss)
     """
+
+    if in_dygraph_mode():
+        return _C_ops.final_state_sigmoid_cross_entropy_with_logits(
+            x, label, normalize, int(ignore_index))
     check_variable_and_dtype(x, 'input', ['float16', 'float32', 'float64'],
                              'sigmoid_cross_entropy_with_logits')
 
@@ -1452,13 +1466,16 @@ def sigmoid_cross_entropy_with_logits(x,
 
     out = helper.create_variable_for_type_inference(dtype=x.dtype)
 
-    helper.append_op(
-        type="sigmoid_cross_entropy_with_logits",
-        inputs={"X": x,
-                "Label": label},
-        attrs={"ignore_index": ignore_index,
-               'normalize': normalize},
-        outputs={"Out": out})
+    helper.append_op(type="sigmoid_cross_entropy_with_logits",
+                     inputs={
+                         "X": x,
+                         "Label": label
+                     },
+                     attrs={
+                         "ignore_index": ignore_index,
+                         'normalize': normalize
+                     },
+                     outputs={"Out": out})
     return out
 
 
@@ -1569,6 +1586,10 @@ def huber_loss(input, label, delta):
         HuberLoss, = exe.run(feed={'input':input_data ,'label':label_data}, fetch_list=[loss.name])
         print(HuberLoss)  #[[1.5], [0.5], [0.5], [0. ]], dtype=float32
     """
+    if in_dygraph_mode():
+        out, residual = _C_ops.final_state_huber_loss(input, label, delta)
+        return out
+
     helper = LayerHelper('huber_loss', **locals())
     check_variable_and_dtype(input, 'input', ['float32', 'float64'],
                              'huber_loss')
@@ -1577,13 +1598,16 @@ def huber_loss(input, label, delta):
     residual = helper.create_variable_for_type_inference(
         dtype=helper.input_dtype())
     out = helper.create_variable_for_type_inference(dtype=helper.input_dtype())
-    helper.append_op(
-        type='huber_loss',
-        inputs={'X': input,
-                'Y': label},
-        outputs={'Out': out,
-                 'Residual': residual},
-        attrs={'delta': delta})
+    helper.append_op(type='huber_loss',
+                     inputs={
+                         'X': input,
+                         'Y': label
+                     },
+                     outputs={
+                         'Out': out,
+                         'Residual': residual
+                     },
+                     attrs={'delta': delta})
     return out
 
 
@@ -1637,12 +1661,13 @@ def kldiv_loss(x, target, reduction='mean', name=None):
                              'kldiv_loss')
     check_type(reduction, 'reduction', str, 'kldiv_loss')
     loss = helper.create_variable_for_type_inference(dtype=x.dtype)
-    helper.append_op(
-        type='kldiv_loss',
-        inputs={'X': x,
-                'Target': target},
-        outputs={'Loss': loss},
-        attrs={'reduction': reduction})
+    helper.append_op(type='kldiv_loss',
+                     inputs={
+                         'X': x,
+                         'Target': target
+                     },
+                     outputs={'Loss': loss},
+                     attrs={'reduction': reduction})
     return loss
 
 
@@ -1688,33 +1713,7 @@ def npair_loss(anchor, positive, labels, l2_reg=0.002):
           print(npair_loss)
   
     """
-    check_variable_and_dtype(anchor, 'anchor', ['float32', 'float64'],
-                             'npair_loss')
-    check_variable_and_dtype(positive, 'positive', ['float32', 'float64'],
-                             'positive')
-    check_variable_and_dtype(labels, 'labels', ['float32', 'float64', 'int64'],
-                             'labels')
-    Beta = 0.25
-    batch_size = labels.shape[0]
-
-    labels = nn.reshape(labels, shape=[batch_size, 1])
-    labels = nn.expand(labels, expand_times=[1, batch_size])
-
-    labels = equal(labels, nn.transpose(labels, perm=[1, 0])).astype('float32')
-    labels = labels / nn.reduce_sum(labels, dim=1, keep_dim=True)
-
-    l2loss = nn.reduce_mean(nn.reduce_sum(square(anchor), 1)) \
-             + nn.reduce_mean(nn.reduce_sum(square(positive), 1))
-    l2loss = l2loss * Beta * l2_reg
-
-    similarity_matrix = nn.matmul(
-        anchor, positive, transpose_x=False, transpose_y=True)
-    softmax_ce = softmax_with_cross_entropy(
-        logits=similarity_matrix, label=labels, soft_label=True)
-    cross_entropy = nn.reduce_sum(labels * softmax_ce, 0)
-    celoss = nn.reduce_mean(cross_entropy)
-
-    return l2loss + celoss
+    return paddle.nn.functional.npair_loss(anchor, positive, labels, l2_reg)
 
 
 def mse_loss(input, label):

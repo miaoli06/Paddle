@@ -14,15 +14,11 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/math/sequence_padding.h"
 
-namespace paddle {
-namespace framework {
-class LoDTensor;
-class Tensor;
-}  // namespace framework
-namespace platform {
-class CPUDeviceContext;
-}  // namespace platform
-}  // namespace paddle
+#include "paddle/phi/backends/cpu/cpu_context.h"
+
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace operators {
@@ -32,8 +28,11 @@ template <typename T>
 void CopyValidData(framework::Tensor* dst_tensor,
                    const framework::Tensor* src_tensor,
                    const framework::Vector<size_t>& seq_offsets,
-                   int pad_seq_len, int step_width, bool norm_by_len,
-                   CopyType type, PadLayout layout) {
+                   int pad_seq_len,
+                   int step_width,
+                   bool norm_by_len,
+                   CopyType type,
+                   PadLayout layout) {
   int seq_num = seq_offsets.size() - 1;
   const T* src_data = src_tensor->data<T>();
   T* dst_data = dst_tensor->data<T>();
@@ -44,12 +43,16 @@ void CopyValidData(framework::Tensor* dst_tensor,
   for (int seq_idx = 0; seq_idx < seq_num; ++seq_idx) {
     int valid_seq_len = seq_offsets[seq_idx + 1] - seq_offsets[seq_idx];
     PADDLE_ENFORCE_GE(
-        pad_seq_len, valid_seq_len,
+        pad_seq_len,
+        valid_seq_len,
         platform::errors::InvalidArgument(
             "The padded sequence length can not "
             "be less than its original length. Expected %ld >= %ld, but got "
             "%ld < %ld. Please check input value.",
-            pad_seq_len, valid_seq_len, pad_seq_len, valid_seq_len));
+            pad_seq_len,
+            valid_seq_len,
+            pad_seq_len,
+            valid_seq_len));
     int seq_data_offset = seq_offsets[seq_idx] * step_width;
     int pad_data_offset = layout == kBatchLengthWidth
                               ? seq_idx * pad_seq_len * step_width
@@ -74,7 +77,9 @@ void CopyValidData(framework::Tensor* dst_tensor,
 }
 
 template <typename T>
-static void fast_mem_init(void* dest, size_t dest_size, const T* src,
+static void fast_mem_init(void* dest,
+                          size_t dest_size,
+                          const T* src,
                           size_t num_bytes) {
   if (dest == nullptr || dest_size == 0 || src == nullptr) return;
 
@@ -90,13 +95,15 @@ static void fast_mem_init(void* dest, size_t dest_size, const T* src,
 }
 
 template <typename T>
-class PaddingLoDTensorFunctor<platform::CPUDeviceContext, T> {
+class PaddingLoDTensorFunctor<phi::CPUContext, T> {
  public:
-  void operator()(const platform::CPUDeviceContext& context,
+  void operator()(const phi::CPUContext& context,
                   const framework::LoDTensor& seq_tensor,
                   framework::LoDTensor* pad_tensor,
-                  const framework::LoDTensor& pad_value, int pad_seq_len = -1,
-                  int lod_level = 0, bool norm_by_times = false,
+                  const framework::LoDTensor& pad_value,
+                  int pad_seq_len = -1,
+                  int lod_level = 0,
+                  bool norm_by_times = false,
                   const PadLayout layout = kBatchLengthWidth) {
     auto seq_lod = seq_tensor.lod();
     const auto seq_offsets = framework::ToAbsOffset(seq_lod)[lod_level];
@@ -107,41 +114,55 @@ class PaddingLoDTensorFunctor<platform::CPUDeviceContext, T> {
     }
     int step_width = seq_tensor.numel() / seq_tensor_dims[0];
 
-    CheckDims(seq_tensor_dims, pad_tensor_dims, seq_offsets, pad_seq_len,
-              step_width, layout);
+    CheckDims(seq_tensor_dims,
+              pad_tensor_dims,
+              seq_offsets,
+              pad_seq_len,
+              step_width,
+              layout);
 
     PADDLE_ENFORCE_EQ(
-        pad_value.numel() == 1 || pad_value.numel() == step_width, true,
+        pad_value.numel() == 1 || pad_value.numel() == step_width,
+        true,
         platform::errors::InvalidArgument(
             "The numel of 'pad_value' can only be 1 or be equal to the "
             "'step_width', but got %ld != 1 and %ld. Please check the input "
             "value.",
-            pad_value.numel(), step_width));
+            pad_value.numel(),
+            step_width));
 
     // fill padding value
     T* pad_data = pad_tensor->data<T>();
     const T* pad_value_data = pad_value.data<T>();
     if (pad_value.numel() == 1) {
-      fast_mem_init<T>(pad_data, pad_tensor->numel(), pad_value_data,
-                       sizeof(T));
+      fast_mem_init<T>(
+          pad_data, pad_tensor->numel(), pad_value_data, sizeof(T));
     } else {
       for (int i = 0; i < pad_tensor->numel(); i += step_width) {
         memcpy(pad_data + i, pad_value_data, step_width * sizeof(T));
       }
     }
 
-    CopyValidData<T>(pad_tensor, &seq_tensor, seq_offsets, pad_seq_len,
-                     step_width, norm_by_times, kSeqToPad, layout);
+    CopyValidData<T>(pad_tensor,
+                     &seq_tensor,
+                     seq_offsets,
+                     pad_seq_len,
+                     step_width,
+                     norm_by_times,
+                     kSeqToPad,
+                     layout);
   }
 };
 
 template <typename T>
-class UnpaddingLoDTensorFunctor<platform::CPUDeviceContext, T> {
+class UnpaddingLoDTensorFunctor<phi::CPUContext, T> {
  public:
-  void operator()(const platform::CPUDeviceContext& context,
+  void operator()(const phi::CPUContext& context,
                   const framework::LoDTensor& pad_tensor,
-                  framework::LoDTensor* seq_tensor, int pad_seq_len = -1,
-                  int lod_level = 0, bool norm_by_times = false,
+                  framework::LoDTensor* seq_tensor,
+                  int pad_seq_len = -1,
+                  int lod_level = 0,
+                  bool norm_by_times = false,
                   const PadLayout layout = kBatchLengthWidth) {
     auto seq_offsets = framework::ToAbsOffset(seq_tensor->lod())[lod_level];
     const auto& seq_tensor_dims = seq_tensor->dims();
@@ -151,23 +172,33 @@ class UnpaddingLoDTensorFunctor<platform::CPUDeviceContext, T> {
     }
     int step_width = seq_tensor->numel() / seq_tensor_dims[0];
 
-    CheckDims(seq_tensor_dims, pad_tensor_dims, seq_offsets, pad_seq_len,
-              step_width, layout);
+    CheckDims(seq_tensor_dims,
+              pad_tensor_dims,
+              seq_offsets,
+              pad_seq_len,
+              step_width,
+              layout);
 
-    CopyValidData<T>(seq_tensor, &pad_tensor, seq_offsets, pad_seq_len,
-                     step_width, norm_by_times, kPadToSeq, layout);
+    CopyValidData<T>(seq_tensor,
+                     &pad_tensor,
+                     seq_offsets,
+                     pad_seq_len,
+                     step_width,
+                     norm_by_times,
+                     kPadToSeq,
+                     layout);
   }
 };
 
-template class PaddingLoDTensorFunctor<platform::CPUDeviceContext, int>;
-template class PaddingLoDTensorFunctor<platform::CPUDeviceContext, int64_t>;
-template class PaddingLoDTensorFunctor<platform::CPUDeviceContext, float>;
-template class PaddingLoDTensorFunctor<platform::CPUDeviceContext, double>;
+template class PaddingLoDTensorFunctor<phi::CPUContext, int>;
+template class PaddingLoDTensorFunctor<phi::CPUContext, int64_t>;
+template class PaddingLoDTensorFunctor<phi::CPUContext, float>;
+template class PaddingLoDTensorFunctor<phi::CPUContext, double>;
 
-template class UnpaddingLoDTensorFunctor<platform::CPUDeviceContext, int>;
-template class UnpaddingLoDTensorFunctor<platform::CPUDeviceContext, int64_t>;
-template class UnpaddingLoDTensorFunctor<platform::CPUDeviceContext, float>;
-template class UnpaddingLoDTensorFunctor<platform::CPUDeviceContext, double>;
+template class UnpaddingLoDTensorFunctor<phi::CPUContext, int>;
+template class UnpaddingLoDTensorFunctor<phi::CPUContext, int64_t>;
+template class UnpaddingLoDTensorFunctor<phi::CPUContext, float>;
+template class UnpaddingLoDTensorFunctor<phi::CPUContext, double>;
 
 }  // namespace math
 }  // namespace operators

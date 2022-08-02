@@ -12,6 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #include "paddle/fluid/framework/tuple.h"
+
 #include "gtest/gtest.h"
 
 TEST(Tuple, Make) {
@@ -22,9 +23,9 @@ TEST(Tuple, Make) {
 
   paddle::framework::Tuple* tuple = paddle::framework::make_tuple(element_type);
 
-  EXPECT_EQ(BOOST_GET(int, tuple->get(0)), 12);
-  EXPECT_EQ(BOOST_GET(float, tuple->get(1)), 12.0f);
-  EXPECT_EQ(BOOST_GET(std::string, tuple->get(2)), "ElementVar");
+  EXPECT_EQ(PADDLE_GET(int, tuple->get(0)), 12);
+  EXPECT_EQ(PADDLE_GET(float, tuple->get(1)), 12.0f);
+  EXPECT_EQ(PADDLE_GET(std::string, tuple->get(2)), "ElementVar");
 
   delete tuple;
 }

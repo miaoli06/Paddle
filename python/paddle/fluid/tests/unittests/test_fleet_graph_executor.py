@@ -21,6 +21,7 @@ from launch_function_helper import launch_func
 
 
 class TestFleetGraphExecutionMetaOptimizer(unittest.TestCase):
+
     def test_graph_execution_optimizer(self):
         node_a = {
             "PADDLE_TRAINER_ID": "0",
@@ -43,26 +44,28 @@ class TestFleetGraphExecutionMetaOptimizer(unittest.TestCase):
         def node_func():
             role = role_maker.PaddleCloudRoleMaker(is_collective=True)
             fleet.init(role)
-            input_x = paddle.fluid.layers.data(
-                name="x", shape=[32], dtype='float32')
-            input_y = paddle.fluid.layers.data(
-                name="y", shape=[1], dtype='int64')
+            input_x = paddle.fluid.layers.data(name="x",
+                                               shape=[32],
+                                               dtype='float32')
+            input_y = paddle.fluid.layers.data(name="y",
+                                               shape=[1],
+                                               dtype='int64')
 
             fc_1 = paddle.fluid.layers.fc(input=input_x, size=64, act='tanh')
             fc_2 = paddle.fluid.layers.fc(input=fc_1, size=64, act='tanh')
             prediction = paddle.fluid.layers.fc(input=[fc_2],
                                                 size=2,
                                                 act='softmax')
-            cost = paddle.fluid.layers.cross_entropy(
-                input=prediction, label=input_y)
-            avg_cost = paddle.fluid.layers.mean(x=cost)
+            cost = paddle.fluid.layers.cross_entropy(input=prediction,
+                                                     label=input_y)
+            avg_cost = paddle.mean(x=cost)
 
             strategy = paddle.distributed.fleet.DistributedStrategy()
             strategy.nccl_comm_num = 2
             strategy.sync_nccl_allreduce = True
             optimizer = paddle.optimizer.SGD(learning_rate=0.01)
-            optimizer = fleet.distributed_optimizer(
-                optimizer, strategy=strategy)
+            optimizer = fleet.distributed_optimizer(optimizer,
+                                                    strategy=strategy)
             optimizer.minimize(avg_cost)
             exe = paddle.fluid.Executor(place=paddle.fluid.CPUPlace())
             exe.run(paddle.fluid.default_startup_program())
@@ -72,23 +75,24 @@ class TestFleetGraphExecutionMetaOptimizer(unittest.TestCase):
             def gen_data():
                 return {
                     "x": np.random.random(size=(128, 32)).astype('float32'),
-                    "y": np.random.randint(
-                        2, size=(128, 1)).astype('int64')
+                    "y": np.random.randint(2, size=(128, 1)).astype('int64')
                 }
 
             for i in range(5):
                 cost_val = exe.run(feed=gen_data(), fetch_list=[avg_cost.name])
                 print("cost of step[{}] = {}".format(i, cost_val))
 
-        proc_a = launch_func(node_func, node_a)
-        proc_a.start()
+        # rank 1
+        proc_b = launch_func(node_func, node_b)
+        proc_b.start()
 
+        # rank 0, for wait server ready coverage
         # just for coverage
-        for key in node_b:
-            os.environ[key] = node_b[key]
+        for key in node_a:
+            os.environ[key] = node_a[key]
         node_func()
 
-        proc_a.join()
+        proc_b.join()
 
 
 if __name__ == "__main__":

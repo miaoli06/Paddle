@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "paddle/fluid/framework/details/multi_devices_helper.h"
-#include <algorithm>
-#include <unordered_set>
+
 #include "paddle/fluid/framework/details/computation_op_handle.h"
 #include "paddle/fluid/framework/details/eager_deletion_op_handle.h"
 #include "paddle/fluid/framework/details/share_tensor_buffer_op_handle.h"
@@ -163,7 +162,8 @@ static bool IsDataParallelInferenceGraphImpl(
   }
 
   PADDLE_ENFORCE_GE(
-      place_num, 1,
+      place_num,
+      1,
       platform::errors::NotFound(
           "No place found, this may be a bug.\nIt would be helpful if you "
           "could inform us of how this conversion went by opening a github "

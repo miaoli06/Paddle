@@ -14,19 +14,13 @@
 
 #include "paddle/fluid/memory/allocation/retry_allocator.h"
 
-#include <algorithm>
-#include <chrono>              // NOLINT
-#include <condition_variable>  // NOLINT
-#include <mutex>               // NOLINT
-#include <string>
 #include <thread>  // NOLINT
-#include <vector>
 
 #include "gtest/gtest.h"
 #include "paddle/fluid/memory/allocation/best_fit_allocator.h"
 #include "paddle/fluid/memory/allocation/cpu_allocator.h"
 #include "paddle/fluid/memory/allocation/locked_allocator.h"
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 #include "paddle/fluid/memory/allocation/cuda_allocator.h"
 #endif
 
@@ -93,7 +87,8 @@ TEST(RetryAllocator, RetryAllocator) {
     }
 
     void *val = cpu_allocation->ptr();
-    bool is_all_equal = std::all_of(addresses.begin(), addresses.end(),
+    bool is_all_equal = std::all_of(addresses.begin(),
+                                    addresses.end(),
                                     [val](void *p) { return p == val; });
     ASSERT_TRUE(is_all_equal);
     allocator->Release(platform::CPUPlace());
@@ -105,12 +100,12 @@ class DummyAllocator : public Allocator {
   bool IsAllocThreadSafe() const override { return true; }
 
  protected:
-  Allocation *AllocateImpl(size_t size) override {
+  phi::Allocation *AllocateImpl(size_t size) override {
     PADDLE_THROW_BAD_ALLOC(platform::errors::ResourceExhausted(
         "Here is a test exception, always BadAlloc."));
   }
 
-  void FreeImpl(Allocation *) override {}
+  void FreeImpl(phi::Allocation *) override {}
 };
 
 TEST(RetryAllocator, RetryAllocatorLastAllocFailure) {
@@ -127,7 +122,7 @@ TEST(RetryAllocator, RetryAllocatorLastAllocFailure) {
     }
   }
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
   {
     platform::CUDAPlace p(0);
     RetryAllocator allocator(std::make_shared<CUDAAllocator>(p), retry_ms);

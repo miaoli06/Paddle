@@ -13,13 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/operators/affine_grid_op.h"
+
 #include <memory>
 #include <string>
 #include <vector>
+
 #include "paddle/fluid/framework/op_registry.h"
-#ifdef PADDLE_WITH_CUDA
-#include "paddle/fluid/platform/cudnn_helper.h"
-#endif
+#include "paddle/fluid/framework/op_version_registry.h"
+#include "paddle/fluid/platform/device/gpu/gpu_dnn.h"
 
 namespace paddle {
 namespace operators {
@@ -27,8 +28,11 @@ namespace operators {
 using Tensor = framework::Tensor;
 
 template <typename T>
-struct Linspace<paddle::platform::CPUDeviceContext, T> {
-  void operator()(T start, T end, int count, bool align_corners,
+struct Linspace<phi::CPUContext, T> {
+  void operator()(T start,
+                  T end,
+                  int count,
+                  bool align_corners,
                   framework::Tensor* numbers,
                   const framework::ExecutionContext& ctx) {
     T* number_data = numbers->mutable_data<T>({count}, platform::CPUPlace());
@@ -47,38 +51,46 @@ class AffineGridOp : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
   void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE_EQ(ctx->HasInput("Theta"), true,
+    PADDLE_ENFORCE_EQ(ctx->HasInput("Theta"),
+                      true,
                       platform::errors::NotFound(
                           "The input 'Theta' of AffineGridOp is not found."));
-    PADDLE_ENFORCE_EQ(ctx->HasOutput("Output"), true,
+    PADDLE_ENFORCE_EQ(ctx->HasOutput("Output"),
+                      true,
                       platform::errors::NotFound(
                           "The output 'Output' of AffineGridOp is not found."));
     auto theta_dims = ctx->GetInputDim("Theta");
     PADDLE_ENFORCE_EQ(
-        theta_dims.size(), 3,
+        theta_dims.size(),
+        3,
         platform::errors::InvalidArgument(
             "The input Theta's dimensions size should be 3. But received "
             "Theta's demensions size=[%d],  Theta's dimensions=[%s].",
-            theta_dims.size(), theta_dims));
+            theta_dims.size(),
+            theta_dims));
 
     auto output_shape = ctx->Attrs().Get<std::vector<int>>("output_shape");
     if (output_shape.size() == 0) {
       PADDLE_ENFORCE_EQ(
-          ctx->HasInput("OutputShape"), true,
+          ctx->HasInput("OutputShape"),
+          true,
           platform::errors::NotFound(
               "The input 'OutputShape' of AffineGridOp should not be null if "
               "'output_shape' is not configured."));
       auto output_shape_dims = ctx->GetInputDim("OutputShape");
       PADDLE_ENFORCE_EQ(
-          output_shape_dims.size(), 1,
+          output_shape_dims.size(),
+          1,
           platform::errors::InvalidArgument(
               "The dimesions size of input OutputShape in AffineGridOp should "
               "be 1. But received OutputShape's  dimesions size=[%d], "
               "OutputShape's  dimesions=[%s]",
-              output_shape_dims.size(), output_shape_dims));
+              output_shape_dims.size(),
+              output_shape_dims));
     } else {
       PADDLE_ENFORCE_EQ(
-          output_shape.size(), 4,
+          output_shape.size(),
+          4,
           platform::errors::InvalidArgument(
               "The size of attribute 'output_shape' in AffineGridOp should be "
               "4. But received output_shape's size=[%d].",
@@ -86,21 +98,24 @@ class AffineGridOp : public framework::OperatorWithKernel {
     }
 
     PADDLE_ENFORCE_EQ(
-        theta_dims[1], 2,
+        theta_dims[1],
+        2,
         platform::errors::InvalidArgument(
             "The second dimesion of input 'theta' in AffineGridOp should be 2. "
             "But received second dimesion=[%d], dimesions=[%s]",
-            theta_dims[1], theta_dims));
+            theta_dims[1],
+            theta_dims));
     PADDLE_ENFORCE_EQ(
-        theta_dims[2], 3,
+        theta_dims[2],
+        3,
         platform::errors::InvalidArgument(
             "The third dimesion of input 'theta' in AffineGridOp should be 3. "
             "But received third dimesion=[%d], dimesions=[%s]",
-            theta_dims[2], theta_dims));
+            theta_dims[2],
+            theta_dims));
 
     // N * H * W * 2
-    ctx->SetOutputDim("Output",
-                      framework::make_ddim({theta_dims[0], -1, -1, 2}));
+    ctx->SetOutputDim("Output", phi::make_ddim({theta_dims[0], -1, -1, 2}));
     ctx->ShareLoD("Theta", "Output");
   }
 
@@ -108,14 +123,14 @@ class AffineGridOp : public framework::OperatorWithKernel {
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
     framework::LibraryType library{framework::LibraryType::kPlain};
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
     if (platform::CanCUDNNBeUsed(ctx)) {
       library = framework::LibraryType::kCUDNN;
     }
 #endif
     auto data_type = OperatorWithKernel::IndicateVarDataType(ctx, "Theta");
-    return framework::OpKernelType(data_type, ctx.GetPlace(),
-                                   framework::DataLayout::kAnyLayout, library);
+    return framework::OpKernelType(
+        data_type, ctx.GetPlace(), framework::DataLayout::kAnyLayout, library);
   }
 };
 
@@ -134,10 +149,11 @@ class AffineGridOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<bool>(
         "use_cudnn",
         "(bool, default false) Only used in cudnn kernel, need install cudnn")
-        .SetDefault(true);
+        .SetDefault(true)
+        .AsExtra();
     AddAttr<bool>("align_corners",
                   "(bool, default false) Whether to align the corners of input"
-                  "and ouput.")
+                  "and output.")
         .SetDefault(true);
     AddAttr<std::vector<int>>(
         "output_shape",
@@ -225,7 +241,7 @@ class AffineGridOpGrad : public framework::OperatorWithKernel {
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext& ctx) const override {
     framework::LibraryType library_{framework::LibraryType::kPlain};
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
     if (platform::CanCUDNNBeUsed(ctx)) {
       library_ = framework::LibraryType::kCUDNN;
     }
@@ -233,7 +249,8 @@ class AffineGridOpGrad : public framework::OperatorWithKernel {
     return framework::OpKernelType(OperatorWithKernel::IndicateVarDataType(
                                        ctx, framework::GradVarName("Output")),
                                    ctx.GetPlace(),
-                                   framework::DataLayout::kAnyLayout, library_);
+                                   framework::DataLayout::kAnyLayout,
+                                   library_);
   }
 };
 
@@ -258,16 +275,25 @@ class AffineGridGradMaker : public framework::SingleGradOpMaker<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OPERATOR(affine_grid, ops::AffineGridOp, ops::AffineGridOpMaker,
+REGISTER_OPERATOR(affine_grid,
+                  ops::AffineGridOp,
+                  ops::AffineGridOpMaker,
                   ops::AffineGridGradMaker<paddle::framework::OpDesc>,
                   ops::AffineGridGradMaker<paddle::imperative::OpBase>);
 REGISTER_OPERATOR(affine_grid_grad, ops::AffineGridOpGrad);
 
-REGISTER_OP_CPU_KERNEL(
-    affine_grid,
-    ops::AffineGridOpKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::AffineGridOpKernel<paddle::platform::CPUDeviceContext, double>);
-REGISTER_OP_CPU_KERNEL(
-    affine_grid_grad,
-    ops::AffineGridGradOpKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::AffineGridGradOpKernel<paddle::platform::CPUDeviceContext, double>);
+REGISTER_OP_CPU_KERNEL(affine_grid,
+                       ops::AffineGridOpKernel<phi::CPUContext, float>,
+                       ops::AffineGridOpKernel<phi::CPUContext, double>);
+REGISTER_OP_CPU_KERNEL(affine_grid_grad,
+                       ops::AffineGridGradOpKernel<phi::CPUContext, float>,
+                       ops::AffineGridGradOpKernel<phi::CPUContext, double>);
+
+REGISTER_OP_VERSION(affine_grid)
+    .AddCheckpoint(
+        R"ROC(
+               Compatible upgrade of affine_grid, add a new attribute [align_corners])ROC",
+        paddle::framework::compatible::OpVersionDesc().NewAttr(
+            "align_corners",
+            "Whether to align the corners of input and output.",
+            true));

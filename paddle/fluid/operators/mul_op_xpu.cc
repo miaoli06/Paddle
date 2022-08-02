@@ -14,11 +14,14 @@ limitations under the License. */
 
 #ifdef PADDLE_WITH_XPU
 
-#include "paddle/fluid/operators/mul_op.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/operators/xpu_api_wrapper.h"
+#include "paddle/fluid/platform/device/device_wrapper.h"
 
 namespace paddle {
 namespace operators {
@@ -28,6 +31,8 @@ using framework::Tensor;
 
 template <typename DeviceContext, typename T>
 class MulXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& context) const override {
     const Tensor* x = context.Input<Tensor>("X");
@@ -44,40 +49,30 @@ class MulXPUKernel : public framework::OpKernel<T> {
                   *y, context.template Attr<int>("y_num_col_dims"))
             : *y;
     z->mutable_data<T>(context.GetPlace());
-    auto z_dim = z->dims();
-    if (z_dim.size() != 2) {
-      z->Resize({x_matrix.dims()[0], y_matrix.dims()[1]});
-    }
+
+    const XPUType* x_ptr = reinterpret_cast<const XPUType*>(x_matrix.data<T>());
+    const XPUType* y_ptr = reinterpret_cast<const XPUType*>(y_matrix.data<T>());
+    XPUType* out_ptr = reinterpret_cast<XPUType*>(z->data<T>());
+
     bool trans_a = false;
     bool trans_b = false;
-    int m = x_matrix.dims()[0];
-    int k = x_matrix.dims()[1];
-    int k1 = y_matrix.dims()[0];
-    int n = y_matrix.dims()[1];
-    PADDLE_ENFORCE_EQ(
-        k, k1, platform::errors::InvalidArgument("Shape mistake in mul_op"));
-    T alpha = static_cast<T>(1.0);
-    T beta = static_cast<T>(0.0);
-    const T* data_a = x_matrix.data<T>();
-    const T* data_b = y_matrix.data<T>();
-    T* data_c = z->data<T>();
-    auto& dev_ctx = context.template device_context<DeviceContext>();
-    int ret = xpu::fc_int16(dev_ctx.x_context(), trans_a, trans_b, m, n, k,
-                            alpha, data_a, data_b, beta, data_c);
-    PADDLE_ENFORCE_EQ(
-        ret, XPU_SUCCESS,
-        platform::errors::External(
-            "XPU API return wrong value[%d], please check whether "
-            "Baidu Kunlun Card is properly installed.",
-            ret));
-    if (z_dim.size() != 2) {
-      z->Resize(z_dim);
-    }
+    auto x_dims = x_matrix.dims();
+    auto y_dims = y_matrix.dims();
+
+    XpuFcInfo fc_info;
+    GetFCInfo(x_dims, y_dims, trans_a, trans_b, &fc_info);
+    auto& dev_ctx =
+        context.template device_context<paddle::platform::XPUDeviceContext>();
+    xpu::Context* xpu_ctx = dev_ctx.x_context();
+
+    MatMulXPUFunction<XPUType>(xpu_ctx, x_ptr, y_ptr, out_ptr, fc_info, 1.0f);
   }
 };
 
 template <typename DeviceContext, typename T>
 class MulGradXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     int x_num_col_dims = ctx.template Attr<int>("x_num_col_dims");
@@ -92,8 +87,8 @@ class MulGradXPUKernel : public framework::OpKernel<T> {
                         : static_cast<const Tensor&>(*y);
     auto* dout = ctx.Input<framework::LoDTensor>(framework::GradVarName("Out"));
     Tensor dout_mat;
-    dout_mat.Resize({framework::flatten_to_2d(x->dims(), x_num_col_dims)[0],
-                     framework::flatten_to_2d(y->dims(), y_num_col_dims)[1]});
+    dout_mat.Resize({phi::flatten_to_2d(x->dims(), x_num_col_dims)[0],
+                     phi::flatten_to_2d(y->dims(), y_num_col_dims)[1]});
     auto* dx = ctx.Output<framework::LoDTensor>(framework::GradVarName("X"));
     auto* dy = ctx.Output<framework::LoDTensor>(framework::GradVarName("Y"));
     if (dx != nullptr) {
@@ -103,70 +98,51 @@ class MulGradXPUKernel : public framework::OpKernel<T> {
       dy->set_lod(y->lod());
     }
     auto& dev_ctx = ctx.template device_context<DeviceContext>();
-    if (dx) {
-      dx->mutable_data<T>(ctx.GetPlace());
-      Tensor dx_matrix = dx->dims().size() > 2
-                             ? framework::ReshapeToMatrix(*dx, x_num_col_dims)
-                             : *dx;
-      // dx = dout * y'. dx: M x K, dout : M x N, y : K x N
-      // blas.MatMul(dout_mat, false, y_matrix, true, &dx_matrix);
-      bool trans_a = false;
-      bool trans_b = true;
-      int m = dout_mat.dims()[0];
-      int k = dout_mat.dims()[1];
-      int n = y_matrix.dims()[0];
-      int k1 = y_matrix.dims()[1];
-      PADDLE_ENFORCE_EQ(
-          k, k1, platform::errors::InvalidArgument("Shape mistake in mul_op"));
-      int lda = (!trans_a) ? k : m;
-      int ldb = (!trans_b) ? n : k;
-      int ldc = n;
-      T alpha = static_cast<T>(1.0);
-      T beta = static_cast<T>(0.0);
-      const T* data_a = dout->data<T>();
-      const T* data_b = y_matrix.data<T>();
-      T* data_c = dx_matrix.data<T>();
-      int ret =
-          xpu::gemm_int16(dev_ctx.x_context(), trans_a, trans_b, m, n, k, alpha,
-                          data_a, lda, data_b, ldb, beta, data_c, ldc);
-      PADDLE_ENFORCE_EQ(ret, XPU_SUCCESS,
-                        platform::errors::External(
-                            "XPU API return wrong value[%d], please check "
-                            "where Baidu Kunlun Card is properly installed.",
-                            ret));
-    }
 
+    XpuFcInfo info_forward;
+    GetFCInfo(x_matrix.dims(), y_matrix.dims(), false, false, &info_forward);
+
+    const XPUType* dout_ptr = reinterpret_cast<const XPUType*>(dout->data<T>());
+    const XPUType* x_ptr = reinterpret_cast<const XPUType*>(x->data<T>());
+    const XPUType* y_ptr = reinterpret_cast<const XPUType*>(y->data<T>());
+
+    xpu::Context* xpu_ctx = dev_ctx.x_context();
+    xpu::ctx_guard RAII_GUARD(xpu_ctx);
+    // begin calculate
+    const XPUType* a_1 = reinterpret_cast<const XPUType*>(NULL);
+    const XPUType* b_1 = reinterpret_cast<const XPUType*>(NULL);
+    const XPUType* a_2 = reinterpret_cast<const XPUType*>(NULL);
+    const XPUType* b_2 = reinterpret_cast<const XPUType*>(NULL);
+    XPUType* c_1 =
+        (dx == NULL)
+            ? reinterpret_cast<XPUType*>(NULL)
+            : reinterpret_cast<XPUType*>(dx->mutable_data<T>(ctx.GetPlace()));
+    XPUType* c_2 =
+        (dy == NULL)
+            ? reinterpret_cast<XPUType*>(NULL)
+            : reinterpret_cast<XPUType*>(dy->mutable_data<T>(ctx.GetPlace()));
+    XpuFcInfo info_dx;
+    XpuFcInfo info_dy;
+    std::tuple<XpuFcInfo,
+               XpuFcInfo,
+               const XPUType*,
+               const XPUType*,
+               const XPUType*,
+               const XPUType*>
+        fc_info = MatmulGradFcInfo(xpu_ctx,
+                                   &RAII_GUARD,
+                                   info_forward,
+                                   false,
+                                   false,
+                                   x_ptr,
+                                   y_ptr,
+                                   dout_ptr);
+    std::tie(info_dx, info_dy, a_1, b_1, a_2, b_2) = fc_info;
+    if (dx) {
+      MatMulXPUFunction<XPUType>(xpu_ctx, a_1, b_1, c_1, info_dx, 1.0f);
+    }
     if (dy) {
-      dy->mutable_data<T>(ctx.GetPlace());
-      Tensor dy_matrix = dy->dims().size() > 2
-                             ? framework::ReshapeToMatrix(*dy, y_num_col_dims)
-                             : *dy;
-      // dy = x' * dout. dy K x N, dout : M x N, x : M x K
-      // blas.MatMul(x_matrix, true, dout_mat, false, &dy_matrix);
-      bool trans_a = true;
-      bool trans_b = false;
-      int k = x_matrix.dims()[0];
-      int m = x_matrix.dims()[1];
-      int k1 = dout_mat.dims()[0];
-      int n = dout_mat.dims()[1];
-      PADDLE_ENFORCE_EQ(
-          k, k1, platform::errors::InvalidArgument("Shape mistake in mul_op"));
-      int lda = (!trans_a) ? k : m;
-      int ldb = (!trans_b) ? n : k;
-      int ldc = n;
-      T alpha = static_cast<T>(1.0);
-      T beta = static_cast<T>(0.0);
-      const T* data_a = x_matrix.data<T>();
-      const T* data_b = dout->data<T>();
-      T* data_c = dy_matrix.data<T>();
-      int ret =
-          xpu::gemm_int16(dev_ctx.x_context(), trans_a, trans_b, m, n, k, alpha,
-                          data_a, lda, data_b, ldb, beta, data_c, ldc);
-      PADDLE_ENFORCE_EQ(ret, XPU_SUCCESS,
-                        platform::errors::External(
-                            "XPU API return wrong value[%d], please check "
-                            "where Baidu Kunlun Card is properly installed.",
-                            ret));
+      MatMulXPUFunction<XPUType>(xpu_ctx, a_2, b_2, c_2, info_dy, 1.0f);
     }
   }
 };
@@ -175,9 +151,14 @@ class MulGradXPUKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
+namespace plat = paddle::platform;
 
 REGISTER_OP_XPU_KERNEL(
-    mul, ops::MulXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    mul,
+    ops::MulXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::MulXPUKernel<paddle::platform::XPUDeviceContext, plat::float16>);
 REGISTER_OP_XPU_KERNEL(
-    mul_grad, ops::MulGradXPUKernel<paddle::platform::XPUDeviceContext, float>)
+    mul_grad,
+    ops::MulGradXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::MulGradXPUKernel<paddle::platform::XPUDeviceContext, plat::float16>)
 #endif

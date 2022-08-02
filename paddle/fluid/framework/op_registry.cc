@@ -14,18 +14,26 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/op_registry.h"
 
+#include "glog/logging.h"
+
 namespace paddle {
 namespace framework {
 
 std::unique_ptr<OperatorBase> OpRegistry::CreateOp(
-    const std::string& type, const VariableNameMap& inputs,
-    const VariableNameMap& outputs, AttributeMap attrs, bool attr_check) {
+    const std::string& type,
+    const VariableNameMap& inputs,
+    const VariableNameMap& outputs,
+    const AttributeMap& attrs,
+    bool attr_check) {
   auto& info = OpInfoMap::Instance().Get(type);
   if (attr_check && info.Checker() != nullptr) {
-    info.Checker()->Check(&attrs);
+    auto tmp_attrs = attrs;
+    info.Checker()->Check(&tmp_attrs);
+    return std::unique_ptr<OperatorBase>(
+        info.Creator()(type, inputs, outputs, tmp_attrs));
   }
-  auto op = info.Creator()(type, inputs, outputs, attrs);
-  return std::unique_ptr<OperatorBase>(op);
+  return std::unique_ptr<OperatorBase>(
+      info.Creator()(type, inputs, outputs, attrs));
 }
 
 static VariableNameMap ConvertOpDescVarsToVarNameMap(
@@ -36,7 +44,8 @@ static VariableNameMap ConvertOpDescVarsToVarNameMap(
     auto& var_names = ret_val[var.parameter()];
     auto& var_names_in_proto = var.arguments();
     var_names.reserve(static_cast<size_t>(var_names_in_proto.size()));
-    std::copy(var_names_in_proto.begin(), var_names_in_proto.end(),
+    std::copy(var_names_in_proto.begin(),
+              var_names_in_proto.end(),
               std::back_inserter(var_names));
   }
   return ret_val;
@@ -58,7 +67,9 @@ std::unique_ptr<OperatorBase> OpRegistry::CreateOp(
 }
 
 std::unique_ptr<OperatorBase> OpRegistry::CreateOp(const OpDesc& op_desc) {
-  return CreateOp(op_desc.Type(), op_desc.Inputs(), op_desc.Outputs(),
+  return CreateOp(op_desc.Type(),
+                  op_desc.Inputs(),
+                  op_desc.Outputs(),
                   op_desc.GetAttrMap());
 }
 

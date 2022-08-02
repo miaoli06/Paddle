@@ -10,6 +10,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 #include <fcntl.h>
 
+#include "paddle/phi/core/generator.h"
+
 #ifdef _POSIX_C_SOURCE
 #undef _POSIX_C_SOURCE
 #endif
@@ -31,10 +33,11 @@ namespace paddle {
 namespace pybind {
 void BindGenerator(py::module* m_ptr) {
   auto& m = *m_ptr;
-  py::class_<framework::GeneratorState,
-             std::shared_ptr<framework::GeneratorState>>(m, "GeneratorState")
+  py::class_<phi::Generator::GeneratorState,
+             std::shared_ptr<phi::Generator::GeneratorState>>(m,
+                                                              "GeneratorState")
       .def("current_seed",
-           [](std::shared_ptr<framework::GeneratorState>& self) {
+           [](std::shared_ptr<phi::Generator::GeneratorState>& self) {
              return self->current_seed;
            });
   py::class_<std::mt19937_64>(m, "mt19937_64", "");
@@ -53,13 +56,11 @@ void BindGenerator(py::module* m_ptr) {
            })
       .def("seed", &framework::Generator::Seed)
       .def("initial_seed", &framework::Generator::GetCurrentSeed)
-      .def("random", &framework::Generator::Random64)
-      //  .def("get_cpu_engine", &framework::Generator::GetCPUEngine)
-      //  .def("set_cpu_engine", &framework::Generator::SetCPUEngine)
-      .def_property("_is_init_py", &framework::Generator::GetIsInitPy,
-                    &framework::Generator::SetIsInitPy);
+      .def("random", &framework::Generator::Random64);
   m.def("default_cpu_generator", &framework::DefaultCPUGenerator);
-  m.def("default_cuda_generator", &framework::GetDefaultCUDAGenerator);
+  m.def("default_cuda_generator", &framework::DefaultCUDAGenerator);
+  m.def("set_random_seed_generator", &framework::SetRandomSeedGenerator);
+  m.def("get_random_seed_generator", &framework::GetRandomSeedGenerator);
 }
 }  // namespace pybind
 }  // namespace paddle

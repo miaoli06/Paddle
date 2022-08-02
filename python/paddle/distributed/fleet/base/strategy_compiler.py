@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+__all__ = []
+
 
 def create_graph(optimizer_list):
     nsize = len(optimizer_list)
@@ -105,6 +107,7 @@ def maximum_path_len_algo(optimizer_list):
 
 
 class StrategyCompilerBase(object):
+
     def __init__(self):
         pass
 
@@ -128,6 +131,9 @@ class StrategyCompiler(StrategyCompilerBase):
         self._user_defined_strategy = None
         self._meta_optimizer_candidates = []
         self._graph_optimizer_candidates = []
+
+    def _get_applied_meta_optimizer(self):
+        return self._meta_optimizers
 
     def _get_applied_meta_list(self):
         return [type(opt).__name__ for opt in self._meta_optimizers]
@@ -187,15 +193,14 @@ class StrategyCompiler(StrategyCompilerBase):
             self._meta_optimizers = [] if meta_optimizers is None else meta_optimizers
             self._graph_optimizers = [] if graph_optimizers is None else graph_optimizers
 
-            return_meta = None if meta_optimizers == None else meta_optimizers[
-                0]
+            return_meta = None if meta_optimizers == None else meta_optimizers[0]
             return_graph = None if graph_optimizers == None else graph_optimizers[
                 0]
 
             if meta_optimizers == None or graph_optimizers == None:
                 return return_meta, return_graph
 
-            # do heuristic filter here, if any meta optimizer in graph optimizers is in 
+            # do heuristic filter here, if any meta optimizer in graph optimizers is in
             # any meta optimizers' black list, set return_graph to None
             need_graph_opt = True
             for graph_opt in graph_optimizers:

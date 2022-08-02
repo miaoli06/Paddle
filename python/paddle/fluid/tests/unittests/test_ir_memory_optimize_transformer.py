@@ -23,26 +23,27 @@ import paddle.dataset.wmt16 as wmt16
 
 os.environ['FLAGS_eager_delete_tensor_gb'] = "0.0"
 
-from parallel_executor_test_base import TestParallelExecutorBase
+from parallel_executor_test_base import TestParallelExecutorBase, DeviceType
 from test_parallel_executor_transformer import get_feed_data_reader, transformer
 
 
 # NOTE(dzhwinter): test diferent strategy colisions.
 # open the eager delete tensor strategy by default.
 class TestTransformerWithIR(TestParallelExecutorBase):
+
     def test_main(self):
         if core.is_compiled_with_cuda():
             # check python transpiler
             self.check_network_convergence(
                 transformer,
-                use_cuda=True,
+                use_device=DeviceType.CUDA,
                 feed_data_reader=get_feed_data_reader(),
                 use_ir_memory_optimize=False,
                 iter=2)
             # check IR memory optimize
             self.check_network_convergence(
                 transformer,
-                use_cuda=True,
+                use_device=DeviceType.CUDA,
                 feed_data_reader=get_feed_data_reader(),
                 use_ir_memory_optimize=True,
                 iter=2)

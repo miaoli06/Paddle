@@ -17,9 +17,8 @@ from __future__ import print_function
 import os
 import collections
 import functools
-from ..framework import Variable, default_main_program, in_dygraph_mode, dygraph_only, Parameter, ParamBase, _varbase_creator, _dygraph_tracer
+from ..framework import Variable, default_main_program, _non_static_mode, dygraph_only, Parameter, ParamBase, _varbase_creator, _dygraph_tracer, EagerParamBase
 import pickle
-import six
 from . import learning_rate_scheduler
 import warnings
 from .. import core
@@ -95,7 +94,7 @@ def save_dygraph(state_dict, model_path):
 
     param_num = 0
     for k, v in state_dict.items():
-        if isinstance(v, ParamBase):
+        if isinstance(v, (ParamBase, EagerParamBase)):
             param_num += 1
 
     if param_num == 0:
@@ -104,7 +103,7 @@ def save_dygraph(state_dict, model_path):
     model_dict = {}
     name_table = {}
     for k, v in state_dict.items():
-        if isinstance(v, (Variable, core.VarBase)):
+        if isinstance(v, (Variable, core.VarBase, core.eager.Tensor)):
             model_dict[k] = v.numpy()
             name_table[k] = v.name
         else:
@@ -120,7 +119,7 @@ def save_dygraph(state_dict, model_path):
         pickle.dump(model_dict, f, protocol=2)
 
 
-# NOTE(chenweihang): load_dygraph will deprecated in future, we don't 
+# NOTE(chenweihang): load_dygraph will deprecated in future, we don't
 # support new loading features for it
 # TODO(qingqing01): remove dygraph_only to support loading static model.
 # maybe need to unify the loading interface after 2.0 API is ready.
@@ -194,16 +193,14 @@ def load_dygraph(model_path, **configs):
         para_dict = {}
         if os.path.exists(params_file_path):
             with open(params_file_path, 'rb') as f:
-                para_dict = pickle.load(f) if six.PY2 else pickle.load(
-                    f, encoding='latin1')
+                para_dict = pickle.load(f, encoding='latin1')
 
         if not config.keep_name_table and "StructuredToParameterName@@" in para_dict:
             del para_dict["StructuredToParameterName@@"]
 
         if os.path.exists(opti_file_path):
             with open(opti_file_path, 'rb') as f:
-                opti_dict = pickle.load(f) if six.PY2 else pickle.load(
-                    f, encoding='latin1')
+                opti_dict = pickle.load(f, encoding='latin1')
     else:
         # check model path
         if not os.path.isdir(model_prefix):
@@ -220,11 +217,11 @@ def load_dygraph(model_path, **configs):
         if os.path.exists(model_file_path):
             # Load state dict by `jit.save/io.save_inference_model` save format
             # NOTE(chenweihang): [ Compatibility of save_inference_model save format ]
-            # The model saved by `save_inference_model` does not completely correspond to 
-            # the information required by the `state_dict` under the dygraph. 
-            # `save_inference_model` not save structured name, we need to remind 
+            # The model saved by `save_inference_model` does not completely correspond to
+            # the information required by the `state_dict` under the dygraph.
+            # `save_inference_model` not save structured name, we need to remind
             # the user to configure the `use_structured_name` argument when `set_state_dict`
-            # NOTE(chenweihang): `jit.save` doesn't save optimizer state 
+            # NOTE(chenweihang): `jit.save` doesn't save optimizer state
 
             # 1. load program desc & construct _ProgramHolder
             programs = _construct_program_holders(model_path,
@@ -260,13 +257,13 @@ def load_dygraph(model_path, **configs):
                     para_dict = structured_para_dict
         else:
             # load state dict by `io.save_params/persistables` save format
-            # TODO(chenweihang): [ Now only supports loading parameters seperately ]
+            # TODO(chenweihang): [ Now only supports loading parameters separately ]
             # If users save all parameters as one file, the [ variable.name -> variable ]
-            # mapping info will lost, so users need to give variable list, but users build 
+            # mapping info will lost, so users need to give variable list, but users build
             # variable list in dygraph mode is difficult, we recommend users to use
             # paddle.static.load_program_state in this case
 
-            # Try to load all the files in the directory in VarBase format, 
+            # Try to load all the files in the directory in VarBase format,
             # the file name is used as the name of VarBase
             load_var_list = []
 

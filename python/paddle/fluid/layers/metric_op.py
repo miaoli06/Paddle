@@ -20,11 +20,12 @@ from __future__ import print_function
 import warnings
 from ..layer_helper import LayerHelper
 from ..initializer import Normal, Constant
-from ..framework import Variable, in_dygraph_mode, _varbase_creator
+from ..framework import Variable, _non_static_mode, _varbase_creator, _in_legacy_dygraph, in_dygraph_mode
 from .. import core
 from ..param_attr import ParamAttr
 from . import nn
 from ..data_feeder import check_variable_and_dtype
+from paddle import _C_ops
 
 __all__ = ['accuracy', 'auc']
 
@@ -52,59 +53,78 @@ def accuracy(input, label, k=1, correct=None, total=None):
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
             import numpy as np
 
-            data = fluid.data(name="input", shape=[-1, 32, 32], dtype="float32")
-            label = fluid.data(name="label", shape=[-1,1], dtype="int")
-            fc_out = fluid.layers.fc(input=data, size=10)
-            predict = fluid.layers.softmax(input=fc_out)
-            result = fluid.layers.accuracy(input=predict, label=label, k=5)
+            import paddle
+            import paddle.static as static
+            import paddle.nn.functional as F
 
-            place = fluid.CPUPlace()
-            exe = fluid.Executor(place)
+            paddle.enable_static()
+            data = static.data(name="input", shape=[-1, 32, 32], dtype="float32")
+            label = static.data(name="label", shape=[-1,1], dtype="int")
+            fc_out = static.nn.fc(x=data, size=10)
+            predict = F.softmax(x=fc_out)
+            result = static.accuracy(input=predict, label=label, k=5)
 
-            exe.run(fluid.default_startup_program())
+            place = paddle.CPUPlace()
+            exe = static.Executor(place)
+
+            exe.run(static.default_startup_program())
             x = np.random.rand(3, 32, 32).astype("float32")
             y = np.array([[1],[0],[1]])
             output= exe.run(feed={"input": x,"label": y},
-                             fetch_list=[result[0]])
+                        fetch_list=[result[0]])
             print(output)
 
-            #[array([0.6666667], dtype=float32)]
+            #[array([0.], dtype=float32)]
     """
-    if in_dygraph_mode():
+    if _non_static_mode():
         if correct is None:
             correct = _varbase_creator(dtype="int32")
         if total is None:
             total = _varbase_creator(dtype="int32")
 
-        topk_out, topk_indices = nn.topk(input, k=k)
-        _acc, _, _ = core.ops.accuracy(topk_out, topk_indices, label, correct,
-                                       total)
+        _k = k.numpy().item(0) if isinstance(k, Variable) else k
+        topk_out, topk_indices = _C_ops.top_k_v2(input, 'k', _k, 'sorted',
+                                                 False)
+        _acc, _, _ = _C_ops.accuracy(topk_out, topk_indices, label, correct,
+                                     total)
         return _acc
 
     helper = LayerHelper("accuracy", **locals())
     check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64'],
                              'accuracy')
-    topk_out, topk_indices = nn.topk(input, k=k)
+    topk_out = helper.create_variable_for_type_inference(dtype=input.dtype)
+    topk_indices = helper.create_variable_for_type_inference(dtype="int64")
+    inputs = {"X": [input]}
+    if isinstance(k, Variable):
+        inputs['K'] = [k]
+    else:
+        attrs = {'k': k}
+    attrs['sorted'] = False
+    helper.append_op(type="top_k_v2",
+                     inputs=inputs,
+                     attrs=attrs,
+                     outputs={
+                         "Out": [topk_out],
+                         "Indices": [topk_indices]
+                     })
     acc_out = helper.create_variable_for_type_inference(dtype="float32")
     if correct is None:
         correct = helper.create_variable_for_type_inference(dtype="int32")
     if total is None:
         total = helper.create_variable_for_type_inference(dtype="int32")
-    helper.append_op(
-        type="accuracy",
-        inputs={
-            "Out": [topk_out],
-            "Indices": [topk_indices],
-            "Label": [label]
-        },
-        outputs={
-            "Accuracy": [acc_out],
-            "Correct": [correct],
-            "Total": [total],
-        })
+    helper.append_op(type="accuracy",
+                     inputs={
+                         "Out": [topk_out],
+                         "Indices": [topk_indices],
+                         "Label": [label]
+                     },
+                     outputs={
+                         "Accuracy": [acc_out],
+                         "Correct": [correct],
+                         "Total": [total],
+                     })
     return acc_out
 
 
@@ -154,25 +174,29 @@ def auc(input,
     Examples:
         .. code-block:: python
 
-            import paddle.fluid as fluid
             import numpy as np
 
-            data = fluid.data(name="input", shape=[-1, 32,32], dtype="float32")
-            label = fluid.data(name="label", shape=[-1], dtype="int")
-            fc_out = fluid.layers.fc(input=data, size=2)
-            predict = fluid.layers.softmax(input=fc_out)
-            result=fluid.layers.auc(input=predict, label=label)
+            import paddle
+            import paddle.static as static
+            import paddle.nn.functional as F
 
-            place = fluid.CPUPlace()
-            exe = fluid.Executor(place)
+            paddle.enable_static()
+            data = static.data(name="input", shape=[-1, 32,32], dtype="float32")
+            label = static.data(name="label", shape=[-1], dtype="int")
+            fc_out = static.nn.fc(x=data, size=2)
+            predict = F.softmax(x=fc_out)
+            result = static.auc(input=predict, label=label)
 
-            exe.run(fluid.default_startup_program())
+            place = paddle.CPUPlace()
+            exe = static.Executor(place)
+
+            exe.run(static.default_startup_program())
             x = np.random.rand(3,32,32).astype("float32")
             y = np.array([1,0,1])
             output= exe.run(feed={"input": x,"label": y},
-                             fetch_list=[result[0]])
+                        fetch_list=[result[0]])
             print(output)
-            #[array([0.5])]
+            #[array([0.])]
     """
     helper = LayerHelper("auc", **locals())
     check_variable_and_dtype(input, 'input', ['float32', 'float64'], 'auc')
@@ -182,8 +206,8 @@ def auc(input,
     # make tp, tn, fp, fn persistable, so that can accumulate all batches.
 
     # for batch auc
-    # we create slide_step+1 buckets, the first slide_steps buckets store 
-    # historical batch-level values, and the last bucket stores the sum values of 
+    # we create slide_step+1 buckets, the first slide_steps buckets store
+    # historical batch-level values, and the last bucket stores the sum values of
     # previous slide_step buckets.
     # The index of bucket that the newest batch will use is determined by batch_id mod slide_steps,
     # and batch_id is store in the last posision of following variable
@@ -198,54 +222,53 @@ def auc(input,
 
     # for global auc
     # Needn't maintain the batch id
-    stat_pos = helper.create_global_variable(
-        persistable=True, dtype='int64', shape=[1, num_thresholds + 1])
-    stat_neg = helper.create_global_variable(
-        persistable=True, dtype='int64', shape=[1, num_thresholds + 1])
+    stat_pos = helper.create_global_variable(persistable=True,
+                                             dtype='int64',
+                                             shape=[1, num_thresholds + 1])
+    stat_neg = helper.create_global_variable(persistable=True,
+                                             dtype='int64',
+                                             shape=[1, num_thresholds + 1])
 
     for var in [batch_stat_pos, batch_stat_neg, stat_pos, stat_neg]:
-        helper.set_variable_initializer(
-            var, Constant(
-                value=0.0, force_cpu=False))
+        helper.set_variable_initializer(var, Constant(value=0.0,
+                                                      force_cpu=False))
 
     # Batch AUC
-    helper.append_op(
-        type="auc",
-        inputs={
-            "Predict": [input],
-            "Label": [label],
-            "StatPos": [batch_stat_pos],
-            "StatNeg": [batch_stat_neg]
-        },
-        attrs={
-            "curve": curve,
-            "num_thresholds": num_thresholds,
-            "slide_steps": slide_steps
-        },
-        outputs={
-            "AUC": [batch_auc_out],
-            "StatPosOut": [batch_stat_pos],
-            "StatNegOut": [batch_stat_neg]
-        })
+    helper.append_op(type="auc",
+                     inputs={
+                         "Predict": [input],
+                         "Label": [label],
+                         "StatPos": [batch_stat_pos],
+                         "StatNeg": [batch_stat_neg]
+                     },
+                     attrs={
+                         "curve": curve,
+                         "num_thresholds": num_thresholds,
+                         "slide_steps": slide_steps
+                     },
+                     outputs={
+                         "AUC": [batch_auc_out],
+                         "StatPosOut": [batch_stat_pos],
+                         "StatNegOut": [batch_stat_neg]
+                     })
     # Global AUC
-    helper.append_op(
-        type="auc",
-        inputs={
-            "Predict": [input],
-            "Label": [label],
-            "StatPos": [stat_pos],
-            "StatNeg": [stat_neg]
-        },
-        attrs={
-            "curve": curve,
-            "num_thresholds": num_thresholds,
-            "slide_steps": 0
-        },
-        outputs={
-            "AUC": [auc_out],
-            "StatPosOut": [stat_pos],
-            "StatNegOut": [stat_neg]
-        })
+    helper.append_op(type="auc",
+                     inputs={
+                         "Predict": [input],
+                         "Label": [label],
+                         "StatPos": [stat_pos],
+                         "StatNeg": [stat_neg]
+                     },
+                     attrs={
+                         "curve": curve,
+                         "num_thresholds": num_thresholds,
+                         "slide_steps": 0
+                     },
+                     outputs={
+                         "AUC": [auc_out],
+                         "StatPosOut": [stat_pos],
+                         "StatNegOut": [stat_neg]
+                     })
     return auc_out, batch_auc_out, [
         batch_stat_pos, batch_stat_neg, stat_pos, stat_neg
     ]

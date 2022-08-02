@@ -14,8 +14,7 @@
 
 #include "paddle/fluid/imperative/jit/program_desc_tracer.h"
 
-#include <unordered_map>
-#include <unordered_set>
+#include "paddle/fluid/framework/convert_utils.h"
 
 namespace paddle {
 namespace imperative {
@@ -48,14 +47,16 @@ class UniqueBlockVarGenerator {
   framework::BlockDesc *block_;
   std::unordered_map<std::string, size_t> counter_;
 
-  std::map<std::weak_ptr<VarBase>, std::string,
+  std::map<std::weak_ptr<VarBase>,
+           std::string,
            std::owner_less<std::weak_ptr<VarBase>>>
       var_to_name_;
   std::unordered_set<std::string> existing_names_;
 };
 
 UniqueBlockVarGenerator::UniqueBlockVarGenerator(
-    const VarDescMetaMap &all_vars, const VarBaseSet &non_exist_input_vars,
+    const VarDescMetaMap &all_vars,
+    const VarBaseSet &non_exist_input_vars,
     framework::BlockDesc *block)
     : all_vars_(all_vars), block_(block) {
   for (auto &var_pair : all_vars_) {
@@ -64,7 +65,9 @@ UniqueBlockVarGenerator::UniqueBlockVarGenerator(
       InsertNewVarInBlock(var_pair.first, *var_desc, var_desc->Name());
     } else if (non_exist_input_vars.count(var_pair.first.lock()) > 0) {
       VLOG(10) << "Mark " << var_desc->Name() << " as persistable";
-      InsertNewVarInBlock(var_pair.first, *var_desc, var_desc->Name(),
+      InsertNewVarInBlock(var_pair.first,
+                          *var_desc,
+                          var_desc->Name(),
                           /*force_persistable=*/true);
     }
   }
@@ -72,8 +75,10 @@ UniqueBlockVarGenerator::UniqueBlockVarGenerator(
 
 std::string UniqueBlockVarGenerator::NameOf(const std::weak_ptr<VarBase> &var,
                                             const std::string &prefix) {
+  VLOG(3) << "Finding: " << var.lock()->Name();
   auto all_vars_iter = all_vars_.find(var);
-  PADDLE_ENFORCE_EQ(all_vars_iter != all_vars_.end(), true,
+  PADDLE_ENFORCE_EQ(all_vars_iter != all_vars_.end(),
+                    true,
                     platform::errors::NotFound(
                         "Variable is not found in UniqueBlockVarGenerator"));
 
@@ -102,8 +107,10 @@ std::string UniqueBlockVarGenerator::NameOf(const std::weak_ptr<VarBase> &var,
 }
 
 void UniqueBlockVarGenerator::InsertNewVarInBlock(
-    const std::weak_ptr<VarBase> &var, const framework::VarDesc &var_desc,
-    const std::string &name, bool force_persistable) {
+    const std::weak_ptr<VarBase> &var,
+    const framework::VarDesc &var_desc,
+    const std::string &name,
+    bool force_persistable) {
   var_to_name_[var] = name;
   existing_names_.insert(name);
   auto *new_var_desc = block_->Var(name);
@@ -112,6 +119,15 @@ void UniqueBlockVarGenerator::InsertNewVarInBlock(
   if (force_persistable) {
     new_var_desc->SetPersistable(true);
   }
+}
+
+bool ProgramDescTracer::ContainVar(const std::weak_ptr<VarBase> &var) const {
+  auto vars_iter = vars_.find(var);
+  bool ret = (vars_iter != vars_.end());
+  if (!ret) {
+    VLOG(5) << "Can't found variable: " << var.lock()->Name();
+  }
+  return ret;
 }
 
 void ProgramDescTracer::InsertOp(const std::string &type,
@@ -133,11 +149,19 @@ void ProgramDescTracer::InsertOp(const std::string &type,
   }
 }
 
+void ProgramDescTracer::InsertOp(const std::string &type,
+                                 const NameTensorMap &inputs,
+                                 const NameTensorMap &outputs,
+                                 const framework::AttributeMap &attrs) {
+  // TODO(jiabin): Support this later.
+}
+
 TracedProgramTuple ProgramDescTracer::CreateProgramDesc(
     const std::vector<std::shared_ptr<VarBase>> &feed_vars,
     const std::string &feed_prefix,
     const std::vector<std::shared_ptr<VarBase>> &fetch_vars,
-    const std::string &fetch_prefix, const std::string &tmp_prefix) const {
+    const std::string &fetch_prefix,
+    const std::string &tmp_prefix) const {
   std::unique_ptr<framework::ProgramDesc> prog(new framework::ProgramDesc());
   auto *block = prog->MutableBlock(0);
 
@@ -150,12 +174,16 @@ TracedProgramTuple ProgramDescTracer::CreateProgramDesc(
 
   std::vector<std::string> feed_var_names;
   for (auto &feed_var : feed_vars) {
-    feed_var_names.emplace_back(generator.NameOf(feed_var, feed_prefix));
+    if (ContainVar(feed_var)) {
+      feed_var_names.emplace_back(generator.NameOf(feed_var, feed_prefix));
+    }
   }
 
   std::vector<std::string> fetch_var_names;
   for (auto &fetch_var : fetch_vars) {
-    fetch_var_names.emplace_back(generator.NameOf(fetch_var, fetch_prefix));
+    if (ContainVar(fetch_var)) {
+      fetch_var_names.emplace_back(generator.NameOf(fetch_var, fetch_prefix));
+    }
   }
 
   for (auto &op : ops_) {
@@ -167,7 +195,9 @@ TracedProgramTuple ProgramDescTracer::CreateProgramDesc(
       std::vector<std::string> names;
       names.reserve(pair.second.size());
       for (auto &var : pair.second) {
-        names.emplace_back(generator.NameOf(var, tmp_prefix));
+        if (ContainVar(var)) {
+          names.emplace_back(generator.NameOf(var, tmp_prefix));
+        }
       }
 
       op_desc->SetInput(pair.first, std::move(names));
@@ -177,7 +207,9 @@ TracedProgramTuple ProgramDescTracer::CreateProgramDesc(
       std::vector<std::string> names;
       names.reserve(pair.second.size());
       for (auto &var : pair.second) {
-        names.emplace_back(generator.NameOf(var, tmp_prefix));
+        if (ContainVar(var)) {
+          names.emplace_back(generator.NameOf(var, tmp_prefix));
+        }
       }
 
       op_desc->SetOutput(pair.first, std::move(names));
@@ -192,20 +224,23 @@ TracedProgramTuple ProgramDescTracer::CreateProgramDesc(
     if (pair.second->Persistable()) {
       auto var = pair.first.lock();
       PADDLE_ENFORCE_NOT_NULL(
-          var, platform::errors::NotFound("Persistable var %s does not exist",
-                                          pair.second->Name()));
+          var,
+          platform::errors::NotFound("Persistable var %s does not exist",
+                                     pair.second->Name()));
       persistable_vars.emplace_back(var);
     }
   }
-  return std::make_tuple(std::move(prog), std::move(feed_var_names),
+  return std::make_tuple(std::move(prog),
+                         std::move(feed_var_names),
                          std::move(fetch_var_names),
                          std::move(persistable_vars));
 }
 
 void ProgramDescTracer::InsertVarIfNotExist(
     const std::shared_ptr<VarBase> &new_var, bool is_input) {
-  PADDLE_ENFORCE_NOT_NULL(new_var, platform::errors::InvalidArgument(
-                                       "The variable to insert is NULL."));
+  PADDLE_ENFORCE_NOT_NULL(
+      new_var,
+      platform::errors::InvalidArgument("The variable to insert is NULL."));
   if (vars_.count(new_var) != 0) return;
 
   auto new_var_desc = new framework::VarDesc("");
@@ -222,16 +257,17 @@ void ProgramDescTracer::InsertVarIfNotExist(
   }
 
   const auto &inner_var = new_var->Var();
-  PADDLE_ENFORCE_EQ(inner_var.IsInitialized(), true,
+  PADDLE_ENFORCE_EQ(inner_var.IsInitialized(),
+                    true,
                     platform::errors::InvalidArgument(
                         "The variable to insert is not initialized."));
   if (inner_var.IsType<framework::LoDTensor>()) {
     const auto &tensor = inner_var.Get<framework::LoDTensor>();
     new_var_desc->SetType(framework::proto::VarType::LOD_TENSOR);
-    new_var_desc->SetShape(framework::vectorize<int64_t>(tensor.dims()));
+    new_var_desc->SetShape(phi::vectorize<int64_t>(tensor.dims()));
     new_var_desc->SetLoDLevel(tensor.lod().size());
     if (tensor.IsInitialized()) {
-      new_var_desc->SetDataType(tensor.type());
+      new_var_desc->SetDataType(framework::TransToProtoVarType(tensor.dtype()));
     } else {
       new_var_desc->SetDataType(framework::proto::VarType::FP32);
     }

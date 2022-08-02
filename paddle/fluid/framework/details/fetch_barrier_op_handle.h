@@ -23,10 +23,12 @@
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/platform/device_context.h"
+#include "paddle/fluid/platform/place.h"
 
 namespace paddle {
 namespace framework {
 class Scope;
+
 namespace ir {
 class Node;
 }  // namespace ir
@@ -45,7 +47,8 @@ struct VarHandleBase;
 
 struct FetchBarrierOpHandle : public OpHandleBase {
  public:
-  FetchBarrierOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
+  FetchBarrierOpHandle(ir::Node *node,
+                       const std::vector<Scope *> &local_scopes,
                        const std::vector<platform::Place> &places);
 
   bool IsMultiDeviceTransfer() override;

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include "paddle/fluid/framework/scope_pool.h"
-#include <memory>
 
 namespace paddle {
 namespace framework {
@@ -36,7 +35,8 @@ void ScopePool::Remove(Scope *s) {
     has_scope = scopes_.erase(s);
   }
   PADDLE_ENFORCE_GT(
-      has_scope, 0,
+      has_scope,
+      0,
       platform::errors::NotFound("Global scope %p is not found in ScopePool. "
                                  "Deleting a nonexistent scope is not allowed.",
                                  s));

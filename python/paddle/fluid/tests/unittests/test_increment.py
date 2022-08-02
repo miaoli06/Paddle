@@ -22,10 +22,12 @@ import paddle.fluid as fluid
 
 
 class TestIncrement(unittest.TestCase):
+
     def test_api(self):
         with fluid.program_guard(fluid.Program(), fluid.Program()):
-            input = fluid.layers.fill_constant(
-                shape=[1], dtype='int64', value=5)
+            input = fluid.layers.fill_constant(shape=[1],
+                                               dtype='int64',
+                                               value=5)
             expected_result = np.array([8], dtype='int64')
 
             output = paddle.tensor.math.increment(input, value=3)
@@ -38,6 +40,21 @@ class TestIncrement(unittest.TestCase):
             expected_result = np.array([2], dtype='int64')
             output = paddle.tensor.math.increment(input, value=1)
             self.assertEqual((output.numpy() == expected_result).all(), True)
+
+
+class TestInplaceApiWithDataTransform(unittest.TestCase):
+
+    def test_increment(self):
+        if fluid.core.is_compiled_with_cuda():
+            paddle.enable_static()
+            with paddle.fluid.device_guard("gpu:0"):
+                x = paddle.fluid.layers.fill_constant([1], "float32", 0)
+            with paddle.fluid.device_guard("cpu"):
+                x = paddle.increment(x)
+            exe = paddle.static.Executor(paddle.CUDAPlace(0))
+            a, = exe.run(paddle.static.default_main_program(), fetch_list=[x])
+            paddle.disable_static()
+            self.assertEqual(a[0], 1)
 
 
 if __name__ == "__main__":

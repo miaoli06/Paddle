@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/trainer.h"
+
 #include "io/fs.h"
 
 namespace paddle {
@@ -71,7 +72,7 @@ void TrainerBase::DumpWork(int tid) {
       VLOG(3) << "dump text failed";
       continue;
     }
-  }
+    }
 #endif
 }
 

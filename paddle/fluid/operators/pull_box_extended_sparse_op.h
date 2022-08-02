@@ -37,15 +37,15 @@ static void PullBoxExtendedSparseFunctor(
   std::vector<float *> all_values(slot_size * 2);
   std::vector<int64_t> slot_lengths(slot_size);
   if (flags.empty()) {
-    for (size_t i = 0; i < slot_size; i++) {
-      const auto *slot = inputs[i];
-      const uint64_t *single_slot_keys =
-          reinterpret_cast<const uint64_t *>(slot->data<int64_t>());
-      all_keys[i] = single_slot_keys;
-      slot_lengths[i] = slot->numel();
-      auto *output = outputs[i]->mutable_data<T>(ctx.GetPlace());
+  for (size_t i = 0; i < slot_size; i++) {
+    const auto *slot = inputs[i];
+    const uint64_t *single_slot_keys =
+        reinterpret_cast<const uint64_t *>(slot->data<int64_t>());
+    all_keys[i] = single_slot_keys;
+    slot_lengths[i] = slot->numel();
+    auto *output = outputs[i]->mutable_data<T>(ctx.GetPlace());
       all_values[i] = reinterpret_cast<float *>(output);
-      auto *output_extend = outputs_extend[i]->mutable_data<T>(ctx.GetPlace());
+    auto *output_extend = outputs_extend[i]->mutable_data<T>(ctx.GetPlace());
       all_values[i + slot_size] = reinterpret_cast<float *>(output_extend);
     }
   } else {
@@ -59,7 +59,7 @@ static void PullBoxExtendedSparseFunctor(
       slot_lengths[i] = slot->numel();
       if (flags[i] & 0x01) {
         auto *output = outputs[embedx_offset]->mutable_data<T>(ctx.GetPlace());
-        all_values[i] = reinterpret_cast<float *>(output);
+    all_values[i] = reinterpret_cast<float *>(output);
         ++embedx_offset;
       } else {
         all_values[i] = 0;
@@ -67,11 +67,11 @@ static void PullBoxExtendedSparseFunctor(
       if (flags[i] & 0x02) {
         auto *output_extend =
             outputs_extend[expand_offset]->mutable_data<T>(ctx.GetPlace());
-        all_values[i + slot_size] = reinterpret_cast<float *>(output_extend);
+    all_values[i + slot_size] = reinterpret_cast<float *>(output_extend);
         ++expand_offset;
       } else {
         all_values[i + slot_size] = 0;
-      }
+  }
     }
   }
 #ifdef PADDLE_WITH_BOX_PS
@@ -102,26 +102,26 @@ static void PushBoxExtendedSparseFunctor(
   int batch_size = -1;
 
   if (flags.empty()) {
-    for (size_t i = 0; i < slot_size; i++) {
-      const auto *slot = inputs[i];
-      const uint64_t *single_slot_keys =
-          reinterpret_cast<const uint64_t *>(slot->data<int64_t>());
-      all_keys[i] = single_slot_keys;
-      slot_lengths[i] = slot->numel();
-      int cur_batch_size =
-          slot->lod().size() ? slot->lod()[0].size() - 1 : slot->dims()[0];
-      if (batch_size == -1) {
-        batch_size = cur_batch_size;
-      } else {
+  for (size_t i = 0; i < slot_size; i++) {
+    const auto *slot = inputs[i];
+    const uint64_t *single_slot_keys =
+        reinterpret_cast<const uint64_t *>(slot->data<int64_t>());
+    all_keys[i] = single_slot_keys;
+    slot_lengths[i] = slot->numel();
+    int cur_batch_size =
+        slot->lod().size() ? slot->lod()[0].size() - 1 : slot->dims()[0];
+    if (batch_size == -1) {
+      batch_size = cur_batch_size;
+    } else {
         PADDLE_ENFORCE_EQ(
             batch_size, cur_batch_size,
-            platform::errors::PreconditionNotMet(
-                "The batch size of all input slots should be same,"
-                "please cheack"));
-      }
-      const float *grad_value = d_output[i]->data<float>();
+                        platform::errors::PreconditionNotMet(
+                            "The batch size of all input slots should be same,"
+                            "please cheack"));
+    }
+    const float *grad_value = d_output[i]->data<float>();
       all_grad_values[i] = reinterpret_cast<const float *>(grad_value);
-      const float *grad_value_extend = d_output_extend[i]->data<float>();
+    const float *grad_value_extend = d_output_extend[i]->data<float>();
       all_grad_values[i + slot_size] =
           reinterpret_cast<const float *>(grad_value_extend);
     }
@@ -147,7 +147,7 @@ static void PushBoxExtendedSparseFunctor(
       }
       if (flags[i] & 0x01) {
         const float *grad_value = d_output[embedx_offset]->data<float>();
-        all_grad_values[i] = reinterpret_cast<const float *>(grad_value);
+    all_grad_values[i] = reinterpret_cast<const float *>(grad_value);
         ++embedx_offset;
       } else {
         all_grad_values[i] = 0;
@@ -155,12 +155,12 @@ static void PushBoxExtendedSparseFunctor(
       if (flags[i] & 0x02) {
         const float *grad_value_extend =
             d_output_extend[expand_offset]->data<float>();
-        all_grad_values[i + slot_size] =
-            reinterpret_cast<const float *>(grad_value_extend);
+    all_grad_values[i + slot_size] =
+        reinterpret_cast<const float *>(grad_value_extend);
         ++expand_offset;
       } else {
         all_grad_values[i + slot_size] = 0;
-      }
+  }
     }
   }
 #ifdef PADDLE_WITH_BOX_PS

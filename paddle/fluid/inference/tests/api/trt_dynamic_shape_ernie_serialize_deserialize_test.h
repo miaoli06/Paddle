@@ -12,36 +12,24 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #pragma once
-#include <dirent.h>
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else  // headers below are substitute of unistd.h in windows
+#include <io.h>
+#include <process.h>
+#endif
 #include <functional>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "gflags/gflags.h"
 #include "paddle/fluid/inference/tests/api/trt_test_helper.h"
 
 namespace paddle {
 namespace inference {
-
-static int DeleteCache(std::string path) {
-  DIR* dir = opendir(path.c_str());
-  if (dir == NULL) return 0;
-  struct dirent* ptr;
-  while ((ptr = readdir(dir)) != NULL) {
-    if (std::strcmp(ptr->d_name, ".") == 0 ||
-        std::strcmp(ptr->d_name, "..") == 0) {
-      continue;
-    } else if (ptr->d_type == 8) {
-      std::string file_rm = path + "/" + ptr->d_name;
-      return remove(file_rm.c_str());
-    }
-  }
-  return 0;
-}
 
 static void run(const AnalysisConfig& config, std::vector<float>* out_data) {
   auto predictor = CreatePaddlePredictor(config);
@@ -99,8 +87,8 @@ static void run(const AnalysisConfig& config, std::vector<float>* out_data) {
   auto output_names = predictor->GetOutputNames();
   auto output_t = predictor->GetOutputTensor(output_names[0]);
   std::vector<int> output_shape = output_t->shape();
-  int out_num = std::accumulate(output_shape.begin(), output_shape.end(), 1,
-                                std::multiplies<int>());
+  int out_num = std::accumulate(
+      output_shape.begin(), output_shape.end(), 1, std::multiplies<int>());
   out_data->resize(out_num);
   output_t->copy_to_cpu(out_data->data());
 }
@@ -111,7 +99,7 @@ static void trt_ernie(bool with_fp16, std::vector<float> result) {
   // Delete serialization cache to perform serialization first rather than
   // deserialization.
   std::string opt_cache_dir = FLAGS_infer_model + "/_opt_cache";
-  DeleteCache(opt_cache_dir);
+  delete_cache_files(opt_cache_dir);
 
   SetConfig(&config, model_dir, true /* use_gpu */);
 
@@ -147,8 +135,8 @@ static void trt_ernie(bool with_fp16, std::vector<float> result) {
     precision = AnalysisConfig::Precision::kHalf;
   }
   config.EnableTensorRtEngine(1 << 30, 1, 5, precision, true, false);
-  config.SetTRTDynamicShapeInfo(min_input_shape, max_input_shape,
-                                opt_input_shape);
+  config.SetTRTDynamicShapeInfo(
+      min_input_shape, max_input_shape, opt_input_shape);
   AnalysisConfig* config_deser = new AnalysisConfig(config);
 
   std::vector<float> out_data;

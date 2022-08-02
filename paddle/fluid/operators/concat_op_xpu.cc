@@ -12,11 +12,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #ifdef PADDLE_WITH_XPU
-#include "paddle/fluid/operators/concat_op.h"
 #include <memory>
 #include <string>
 #include <vector>
-#include "paddle/fluid/platform/xpu_header.h"
+
+#include "paddle/fluid/operators/concat_op.h"
+#include "paddle/fluid/platform/device/xpu/xpu_header.h"
+#include "paddle/phi/core/lod_utils.h"
 
 namespace paddle {
 namespace operators {
@@ -24,36 +26,37 @@ using Tensor = framework::Tensor;
 
 template <typename DeviceContext, typename T>
 class ConcatXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     auto ins = ctx.MultiInput<framework::LoDTensor>("X");
     framework::LoDTensor* out = ctx.Output<framework::LoDTensor>("Out");
     int axis = ctx.Attr<int>("axis");
-    PADDLE_ENFORCE_NE(ins[0], nullptr, platform::errors::InvalidArgument(
-                                           "The input should not be null."));
-    PADDLE_ENFORCE_NE(ctx.HasInput("AxisTensor"), true,
+    PADDLE_ENFORCE_NE(
+        ins[0],
+        nullptr,
+        platform::errors::InvalidArgument("The input should not be null."));
+    PADDLE_ENFORCE_NE(ctx.HasInput("AxisTensor"),
+                      true,
                       platform::errors::InvalidArgument(
                           "XPU donot surpport AxisTensor for now"));
     axis = ComputeAxis(static_cast<int64_t>(axis),
                        static_cast<int64_t>(ins[0]->dims().size()));
-    PADDLE_ENFORCE_GE(
-        axis, 0, platform::errors::InvalidArgument("concat: axis shoud >= 0!"));
-    PADDLE_ENFORCE_LT(axis, ins[0]->dims().size(),
+    PADDLE_ENFORCE_GE(axis,
+                      0,
                       platform::errors::InvalidArgument(
-                          "concat: axis shoud < ins[0]->dims()!"));
-
-    auto place = ctx.GetPlace();
-    out->mutable_data<T>(place);
-    std::vector<int> choose_idx;
-    int n = 0;
-    for (unsigned int i = 0; i < ins.size(); ++i) {
-      if (ins[i] && ins[i]->numel() > 0) {
-        choose_idx.push_back(i);
-        n++;
-      }
-    }
-    PADDLE_ENFORCE_GT(
-        n, 0, platform::errors::InvalidArgument("No tensor need concat?"));
+                          "concat: axis should be larger than or "
+                          "equal to 0, but received axis is %d.",
+                          axis));
+    PADDLE_ENFORCE_LT(axis,
+                      ins[0]->dims().size(),
+                      platform::errors::InvalidArgument(
+                          "concat: axis should be less than ins[0]->dims()!"
+                          "But received axis is %d, while ins[0]->dims()"
+                          "size is %d.",
+                          axis,
+                          ins[0]->dims().size()));
 
     // If axis is 0, the lod of the output is not the same as inputs.
     if (axis == 0 && ins[0]->lod().size() > 0) {
@@ -62,13 +65,16 @@ class ConcatXPUKernel : public framework::OpKernel<T> {
       for (size_t i = 1; i < ins.size(); ++i) {
         if (ins[i]->lod().size() > 0) {
           PADDLE_ENFORCE_EQ(
-              ins[i]->lod().size(), lod_size_0,
+              ins[i]->lod().size(),
+              lod_size_0,
               platform::errors::Unimplemented(
                   "The lod level of all input LoDTensors should be same. "
                   "Maybe different lod level of input LoDTensors can concat,"
                   "it is not supported currently. The lod level of %dth input "
                   "is %d and first input is %d.",
-                  i, ins[i]->lod().size(), lod_size_0));
+                  i,
+                  ins[i]->lod().size(),
+                  lod_size_0));
         } else {
           lod_size = 0;
           break;
@@ -77,40 +83,51 @@ class ConcatXPUKernel : public framework::OpKernel<T> {
       if (lod_size) {
         auto* out_lod = out->mutable_lod();
         for (size_t i = 1; i < ins.size(); ++i) {
-          auto in_lod = ConvertToLengthBasedLoD(ins[i]->lod());
-          AppendLoD(out_lod, in_lod);
+          auto in_lod = phi::ConvertToLengthBasedLoD(ins[i]->lod());
+          phi::AppendLoD(out_lod, in_lod);
         }
       }
     }
-
-    auto input_dims = ins[0]->dims();
-    std::vector<std::vector<int>> xdims_list(n);
-    for (int i = 0; i < n; ++i) {
-      std::vector<int> tmp_dims(input_dims.size());
-      for (int j = 0; j < input_dims.size(); ++j) {
-        tmp_dims[j] = ins[i]->dims()[j];
+    auto place = ctx.GetPlace();
+    out->mutable_data<T>(place);
+    std::vector<std::vector<int>> xdims_list;
+    std::vector<const XPUType*> ptrs;
+    for (unsigned int i = 0; i < ins.size(); ++i) {
+      if (ins[i] && ins[i]->numel() > 0) {
+        ptrs.push_back(reinterpret_cast<const XPUType*>(ins[i]->data<T>()));
+        int size = ins[i]->dims().size();
+        std::vector<int> tmp_dims(size);
+        for (int j = 0; j < size; ++j) {
+          tmp_dims[j] = ins[i]->dims()[j];
+        }
+        xdims_list.push_back(tmp_dims);
       }
-      xdims_list[i] = tmp_dims;
     }
 
+    PADDLE_ENFORCE_GT(
+        xdims_list.size(),
+        0,
+        platform::errors::InvalidArgument("No tensor need concat"));
     auto& dev_ctx = ctx.template device_context<DeviceContext>();
-    std::vector<const T*> ptrs;
-    for (int i = 0; i < n; ++i) {
-      ptrs.push_back(ins[choose_idx[i]]->data<T>());
-    }
-    int r = xpu::concat<T>(dev_ctx.x_context(), ptrs, out->data<T>(),
-                           xdims_list, axis);
-    PADDLE_ENFORCE_EQ(
-        r, XPU_SUCCESS,
-        platform::errors::External(
-            "XPU API return wrong value[%d], please check whether "
-            "Baidu Kunlun Card is properly installed.",
-            r));
+
+    int r = xpu::concat<XPUType>(dev_ctx.x_context(),
+                                 ptrs,
+                                 reinterpret_cast<XPUType*>(out->data<T>()),
+                                 xdims_list,
+                                 axis);
+    PADDLE_ENFORCE_EQ(r,
+                      XPU_SUCCESS,
+                      platform::errors::External(
+                          "XPU concat kernel return wrong value[%d %s]",
+                          r,
+                          XPUAPIErrorMsg[r]));
   }
 };
 
 template <typename DeviceContext, typename T>
 class ConcatGradXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& ctx) const {
     auto* out_grad =
@@ -128,8 +145,10 @@ class ConcatGradXPUKernel : public framework::OpKernel<T> {
         }
       }
     }
-    PADDLE_ENFORCE_NE(ins[0], nullptr, platform::errors::InvalidArgument(
-                                           "The input should not be null."));
+    PADDLE_ENFORCE_NE(
+        ins[0],
+        nullptr,
+        platform::errors::InvalidArgument("The input should not be null."));
     auto axis = ctx.Attr<int>("axis");
     if (ctx.HasInput("AxisTensor")) {
       auto* axis_tensor = ctx.Input<framework::Tensor>("AxisTensor");
@@ -138,29 +157,37 @@ class ConcatGradXPUKernel : public framework::OpKernel<T> {
     axis = ComputeAxis(static_cast<int64_t>(axis),
                        static_cast<int64_t>(ins[0]->dims().size()));
     // get output tensor that the name is not kEmptyVarName
-    std::vector<framework::Tensor*> outputs;
-    std::vector<int> choose_idx;
-    int n = 0;
+    std::vector<XPUType*> ptrs(outs.size());
     for (size_t j = 0; j < outs.size(); ++j) {
       if (out_var_names[j] != framework::kEmptyVarName &&
           outs[j]->numel() != 0UL) {
         outs[j]->mutable_data<T>(ctx.GetPlace());
-        outputs.push_back(outs[j]);
-        choose_idx.push_back(j);
-        n++;
+        ptrs[j] = reinterpret_cast<XPUType*>(outs[j]->data<T>());
+      } else {
+        ptrs[j] = nullptr;
       }
     }
-    PADDLE_ENFORCE_GE(axis, 0, platform::errors::InvalidArgument(
-                                   "concat_grad: axis shoud >= 0!"));
-    PADDLE_ENFORCE_LT(axis, out_grad->dims().size(),
+    PADDLE_ENFORCE_GE(axis,
+                      0,
                       platform::errors::InvalidArgument(
-                          "concat_grad: axis shoud < ins[0]->dims()!"));
+                          "concat_grad: axis should be larger than or "
+                          "equal to 0, but received axis is %d.",
+                          axis));
+    PADDLE_ENFORCE_LT(
+        axis,
+        out_grad->dims().size(),
+        platform::errors::InvalidArgument(
+            "concat_grad: axis should be less than ins[0]->dims()!"
+            "But received axis is %d, while ins[0]->dims()"
+            "size is %d.",
+            axis,
+            out_grad->dims().size()));
 
     auto input_dims = ins[0]->dims();
-    std::vector<int> split_list(n);
+    std::vector<int> split_list(ins.size());
     std::vector<int> xdims_list(input_dims.size());
     int total_length = 0;
-    for (int i = 0; i < n; ++i) {
+    for (size_t i = 0; i < ins.size(); ++i) {
       split_list[i] = ins[i]->dims()[axis];
       total_length += ins[i]->dims()[axis];
     }
@@ -172,16 +199,17 @@ class ConcatGradXPUKernel : public framework::OpKernel<T> {
     }
     xdims_list[axis] = total_length;
 
-    std::vector<T*> ptrs(n);
-    for (int i = 0; i < n; ++i) {
-      ptrs[i] = outputs[i]->data<T>();
-    }
-
     auto& dev_ctx = ctx.template device_context<DeviceContext>();
-    int r = xpu::split<T>(dev_ctx.x_context(), out_grad->data<T>(), ptrs,
-                          xdims_list, split_list, axis);
+    int r = xpu::split<XPUType>(
+        dev_ctx.x_context(),
+        reinterpret_cast<const XPUType*>(out_grad->data<T>()),
+        ptrs,
+        xdims_list,
+        split_list,
+        axis);
     PADDLE_ENFORCE_EQ(
-        r, XPU_SUCCESS,
+        r,
+        XPU_SUCCESS,
         platform::errors::External(
             "XPU API return wrong value[%d], please check whether "
             "Baidu Kunlun Card is properly installed.",
@@ -194,9 +222,14 @@ class ConcatGradXPUKernel : public framework::OpKernel<T> {
 
 namespace ops = paddle::operators;
 REGISTER_OP_XPU_KERNEL(
-    concat, ops::ConcatXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    concat,
+    ops::ConcatXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::ConcatXPUKernel<paddle::platform::XPUDeviceContext,
+                         paddle::platform::float16>);
 REGISTER_OP_XPU_KERNEL(
     concat_grad,
-    ops::ConcatGradXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    ops::ConcatGradXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::ConcatGradXPUKernel<paddle::platform::XPUDeviceContext,
+                             paddle::platform::float16>);
 
 #endif

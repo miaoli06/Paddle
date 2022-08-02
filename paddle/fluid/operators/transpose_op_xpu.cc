@@ -13,11 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #ifdef PADDLE_WITH_XPU
-#include "paddle/fluid/operators/transpose_op.h"
 #include <memory>
 #include <string>
 #include <vector>
-#include "paddle/fluid/platform/xpu_header.h"
+
+#include "paddle/fluid/operators/transpose_op.h"
+#include "paddle/fluid/platform/device/xpu/xpu_header.h"
 
 namespace paddle {
 namespace operators {
@@ -26,6 +27,8 @@ using framework::Tensor;
 
 template <typename DeviceContext, typename T>
 class TransposeXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& context) const override {
     auto x = context.Input<framework::Tensor>("X");
@@ -46,16 +49,22 @@ class TransposeXPUKernel : public framework::OpKernel<T> {
       x_shape_host[i] = x_dims[i];
     }
     auto& dev_ctx = context.template device_context<DeviceContext>();
-    int r = xpu::transpose<T>(dev_ctx.x_context(), x_data, y_data, x_shape_host,
-                              axis);
+    int r = xpu::transpose<XPUType>(dev_ctx.x_context(),
+                                    reinterpret_cast<const XPUType*>(x_data),
+                                    reinterpret_cast<XPUType*>(y_data),
+                                    x_shape_host,
+                                    axis);
     PADDLE_ENFORCE_EQ(
-        r, xpu::Error_t::SUCCESS,
+        r,
+        xpu::Error_t::SUCCESS,
         platform::errors::External("XPU kernel error! error code=%d", r));
   }
 };
 
 template <typename DeviceContext, typename T>
 class TransposeGradXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& context) const override {
     auto* out_grad =
@@ -77,10 +86,15 @@ class TransposeGradXPUKernel : public framework::OpKernel<T> {
       out_shape_host[i] = out_grad->dims()[i];
     }
     auto& dev_ctx = context.template device_context<DeviceContext>();
-    int r = xpu::transpose<T>(dev_ctx.x_context(), out_grad->data<T>(),
-                              x_grad->data<T>(), out_shape_host, reversed_axis);
+    int r = xpu::transpose<XPUType>(
+        dev_ctx.x_context(),
+        reinterpret_cast<const XPUType*>(out_grad->data<T>()),
+        reinterpret_cast<XPUType*>(x_grad->data<T>()),
+        out_shape_host,
+        reversed_axis);
     PADDLE_ENFORCE_EQ(
-        r, xpu::Error_t::SUCCESS,
+        r,
+        xpu::Error_t::SUCCESS,
         platform::errors::External("XPU kernel error! error code=%d", r));
   }
 };
@@ -92,15 +106,23 @@ namespace ops = paddle::operators;
 
 REGISTER_OP_XPU_KERNEL(
     transpose,
-    ops::TransposeXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    ops::TransposeXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::TransposeXPUKernel<paddle::platform::XPUDeviceContext,
+                            paddle::platform::float16>);
 REGISTER_OP_XPU_KERNEL(
     transpose_grad,
-    ops::TransposeGradXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    ops::TransposeGradXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::TransposeGradXPUKernel<paddle::platform::XPUDeviceContext,
+                                paddle::platform::float16>);
 REGISTER_OP_XPU_KERNEL(
     transpose2,
-    ops::TransposeXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    ops::TransposeXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::TransposeXPUKernel<paddle::platform::XPUDeviceContext,
+                            paddle::platform::float16>);
 REGISTER_OP_XPU_KERNEL(
     transpose2_grad,
-    ops::TransposeGradXPUKernel<paddle::platform::XPUDeviceContext, float>);
+    ops::TransposeGradXPUKernel<paddle::platform::XPUDeviceContext, float>,
+    ops::TransposeGradXPUKernel<paddle::platform::XPUDeviceContext,
+                                paddle::platform::float16>);
 
 #endif  // PADDLE_WITH_XPU

@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <ThreadPool.h>
+
 #include <fstream>
 #include <memory>
 #include <mutex>  // NOLINT
@@ -23,6 +25,11 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#ifdef PADDLE_WITH_GLOO
+#include <gloo/broadcast.h>
+
+#include "paddle/fluid/framework/fleet/gloo_wrapper.h"
+#endif
 
 #include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/threadpool.h"
@@ -52,15 +59,23 @@ class Dataset {
  public:
   Dataset() {}
   virtual ~Dataset() {}
+  // do sample
+  virtual void TDMSample(const std::string tree_name,
+                         const std::string tree_path,
+                         const std::vector<uint16_t> tdm_layer_counts,
+                         const uint16_t start_sample_layer,
+                         const bool with_hierachy,
+                         const uint16_t seed_,
+                         const uint16_t sample_slot) {}
   // set file list
   virtual void SetFileList(const std::vector<std::string>& filelist) = 0;
-  virtual void SetIndexFileList(const std::vector<std::string>& filelist) {}
   // set readers' num
   virtual void SetThreadNum(int thread_num) = 0;
   // set workers' num
   virtual void SetTrainerNum(int trainer_num) = 0;
   // set fleet send batch size
   virtual void SetFleetSendBatchSize(int64_t size) = 0;
+  virtual void ReleaseMemoryFun() = 0;
   // set fs name and ugi
   virtual void SetHdfsConfig(const std::string& fs_name,
                              const std::string& fs_ugi) = 0;
@@ -78,6 +93,7 @@ class Dataset {
   virtual void SetEnablePvMerge(bool enable_pv_merge) = 0;
   virtual bool EnablePvMerge() = 0;
   virtual void SetMergeBySid(bool is_merge) = 0;
+  virtual void SetShuffleByUid(bool enable_shuffle_uid) = 0;
   // set merge by ins id
   virtual void SetMergeByInsId(int merge_size) = 0;
   virtual void SetGenerateUniqueFeasign(bool gen_uni_feasigns) = 0;
@@ -114,8 +130,6 @@ class Dataset {
   virtual void WaitPreLoadDone() = 0;
   // release all memory data
   virtual void ReleaseMemory() = 0;
-  virtual void ReleaseMemoryFun() = 0;
-
   // local shuffle data
   virtual void LocalShuffle() = 0;
   // global shuffle data
@@ -139,7 +153,8 @@ class Dataset {
   virtual void PostprocessInstance() = 0;
   // only for untest
   virtual void SetCurrentPhase(int current_phase) = 0;
-  virtual void GenerateLocalTablesUnlock(int table_id, int feadim,
+  virtual void GenerateLocalTablesUnlock(int table_id,
+                                         int feadim,
                                          int read_thread_num,
                                          int consume_thread_num,
                                          int shard_num) = 0;
@@ -157,6 +172,11 @@ class Dataset {
   // set fleet send sleep seconds
   virtual void SetFleetSendSleepSeconds(int seconds) = 0;
 
+  virtual std::vector<std::string> GetSlots() = 0;
+
+  virtual void SetGpuGraphMode(int is_graph_mode) = 0;
+  virtual int GetGpuGraphMode() = 0;
+
   // down load to disk mode
   virtual void SetDiablePolling(bool disable) = 0;
   virtual void SetDisableShuffle(bool disable) = 0;
@@ -165,7 +185,8 @@ class Dataset {
   virtual void SetLoadArchiveFile(bool archive) = 0;
 
  protected:
-  virtual int ReceiveFromClient(int msg_type, int client_id,
+  virtual int ReceiveFromClient(int msg_type,
+                                int client_id,
                                 const std::string& msg) = 0;
 };
 
@@ -180,8 +201,8 @@ class DatasetImpl : public Dataset {
       release_thread_->join();
     }
   }
-
   virtual void SetFileList(const std::vector<std::string>& filelist);
+  virtual void ReleaseMemoryFun();
   virtual void SetThreadNum(int thread_num);
   virtual void SetTrainerNum(int trainer_num);
   virtual void SetFleetSendBatchSize(int64_t size);
@@ -195,6 +216,7 @@ class DatasetImpl : public Dataset {
   virtual void SetParseLogKey(bool parse_logkey);
   virtual void SetEnablePvMerge(bool enable_pv_merge);
   virtual void SetMergeBySid(bool is_merge);
+  virtual void SetShuffleByUid(bool enable_shuffle_uid);
 
   virtual void SetMergeByInsId(int merge_size);
   virtual void SetGenerateUniqueFeasign(bool gen_uni_feasigns);
@@ -210,6 +232,8 @@ class DatasetImpl : public Dataset {
   virtual std::pair<std::string, std::string> GetHdfsConfig() {
     return std::make_pair(fs_name_, fs_ugi_);
   }
+  virtual void SetGpuGraphMode(int is_graph_mode);
+  virtual int GetGpuGraphMode();
   virtual std::string GetDownloadCmd();
   virtual const paddle::framework::DataFeedDesc& GetDataFeedDesc() {
     return data_feed_desc_;
@@ -223,9 +247,8 @@ class DatasetImpl : public Dataset {
   virtual void PreLoadIntoMemory();
   virtual void WaitPreLoadDone();
   virtual void ReleaseMemory();
-  virtual void ReleaseMemoryFun();
   virtual void LocalShuffle();
-  virtual void GlobalShuffle(int thread_num = -1);
+  virtual void GlobalShuffle(int thread_num = -1) {}
   virtual void SlotsShuffle(const std::set<std::string>& slots_to_replace) {}
   virtual const std::vector<T>& GetSlotsOriginalData() {
     return slots_shuffle_original_data_;
@@ -239,7 +262,8 @@ class DatasetImpl : public Dataset {
   virtual void PreprocessInstance() {}
   virtual void PostprocessInstance() {}
   virtual void SetCurrentPhase(int current_phase) {}
-  virtual void GenerateLocalTablesUnlock(int table_id, int feadim,
+  virtual void GenerateLocalTablesUnlock(int table_id,
+                                         int feadim,
                                          int read_thread_num,
                                          int consume_thread_num,
                                          int shard_num) {}
@@ -251,22 +275,44 @@ class DatasetImpl : public Dataset {
                                        bool discard_remaining_ins = false);
   virtual void DynamicAdjustReadersNum(int thread_num);
   virtual void SetFleetSendSleepSeconds(int seconds);
-  virtual std::vector<T>& GetInputRecord() { return input_records_; }
+  virtual std::vector<std::string> GetSlots();
+  /* for enable_heterps_
+  virtual void EnableHeterps(bool enable_heterps) {
+    enable_heterps_ = enable_heterps;
+  }
+  */
 
+  std::vector<paddle::framework::Channel<T>>& GetMultiOutputChannel() {
+    return multi_output_channel_;
+  }
+
+  std::vector<paddle::framework::Channel<T>>& GetCurOutputChannel() {
+    if (cur_channel_ == 0) {
+      return multi_output_channel_;
+    } else {
+      return multi_consume_channel_;
+    }
+  }
+  std::vector<uint64_t>& GetGpuGraphTotalKeys() {
+    return gpu_graph_total_keys_;
+  }
+  Channel<T>& GetInputChannelRef() { return input_channel_; }
   // disable shuffle
   virtual void SetDiablePolling(bool disable) {}
   virtual void SetDisableShuffle(bool disable) {}
   virtual void PreLoadIntoDisk(const std::string& path, const int file_num) {}
   virtual void WaitLoadDiskDone(void) {}
   virtual void SetLoadArchiveFile(bool archive) {}
-
  protected:
-  virtual int ReceiveFromClient(int msg_type, int client_id,
-                                const std::string& msg);
+  virtual int ReceiveFromClient(int msg_type,
+                                int client_id,
+                                const std::string& msg) {
+    // TODO(yaoxuefeng) for SlotRecordDataset
+    return -1;
+  }
   std::vector<std::shared_ptr<paddle::framework::DataFeed>> readers_;
   std::vector<std::shared_ptr<paddle::framework::DataFeed>> preload_readers_;
   paddle::framework::Channel<T> input_channel_;
-  paddle::framework::Channel<T*> input_ptr_channel_;
   paddle::framework::Channel<PvInstance> input_pv_channel_;
   std::vector<paddle::framework::Channel<PvInstance>> multi_pv_output_;
   std::vector<paddle::framework::Channel<PvInstance>> multi_pv_consume_;
@@ -274,8 +320,6 @@ class DatasetImpl : public Dataset {
   int channel_num_;
   std::vector<paddle::framework::Channel<T>> multi_output_channel_;
   std::vector<paddle::framework::Channel<T>> multi_consume_channel_;
-  std::vector<paddle::framework::Channel<T*>> output_ptr_channel_;
-  std::vector<paddle::framework::Channel<T*>> consume_ptr_channel_;
   std::vector<std::unordered_set<uint64_t>> local_tables_;
   // when read ins, we put ins from one channel to the other,
   // and when finish reading, we set cur_channel = 1 - cur_channel,
@@ -303,30 +347,46 @@ class DatasetImpl : public Dataset {
   bool parse_content_;
   bool parse_logkey_;
   bool merge_by_sid_;
+  bool shuffle_by_uid_;
+  bool parse_uid_;
   bool enable_pv_merge_;  // True means to merge pv
-  int current_phase_;     // 1 join, 0 update, 3 join_test, 2 update_test
+  int current_phase_;     // 1 join, 0 update
   size_t merge_size_;
   bool slots_shuffle_fea_eval_ = false;
   bool gen_uni_feasigns_ = false;
   int preload_thread_num_;
   std::mutex global_index_mutex_;
   int64_t global_index_ = 0;
-  std::vector<std::shared_ptr<paddle::framework::ThreadPool>>
-      consume_task_pool_;
+  std::vector<std::shared_ptr<ThreadPool>> consume_task_pool_;
   std::vector<T> input_records_;  // only for paddleboxdatafeed
+  std::vector<std::string> use_slots_;
+  bool enable_heterps_ = false;
+  int gpu_graph_mode_ = 0;
+  // std::vector<std::vector<int64_t>> gpu_graph_device_keys_;
+  std::vector<std::vector<std::vector<uint64_t>>> graph_all_type_total_keys_;
+  std::vector<uint64_t> gpu_graph_total_keys_;
 };
 
 // use std::vector<MultiSlotType> or Record as data type
 class MultiSlotDataset : public DatasetImpl<Record> {
  public:
   MultiSlotDataset() {}
+  virtual void TDMSample(const std::string tree_name,
+                         const std::string tree_path,
+                         const std::vector<uint16_t> tdm_layer_counts,
+                         const uint16_t start_sample_layer,
+                         const bool with_hierachy,
+                         const uint16_t seed_,
+                         const uint16_t sample_slot);
   virtual void MergeByInsId();
   virtual void PreprocessInstance();
   virtual void PostprocessInstance();
   virtual void SetCurrentPhase(int current_phase);
-  virtual void GenerateLocalTablesUnlock(int table_id, int feadim,
+  virtual void GenerateLocalTablesUnlock(int table_id,
+                                         int feadim,
                                          int read_thread_num,
-                                         int consume_thread_num, int shard_num);
+                                         int consume_thread_num,
+                                         int shard_num);
   virtual void ClearLocalTables() {
     for (auto& t : local_tables_) {
       t.clear();
@@ -342,6 +402,33 @@ class MultiSlotDataset : public DatasetImpl<Record> {
       const std::unordered_set<uint16_t>& slots_to_replace,
       std::vector<Record>* result);
   virtual ~MultiSlotDataset() {}
+  virtual void GlobalShuffle(int thread_num = -1);
+  virtual void DynamicAdjustReadersNum(int thread_num);
+  virtual void PrepareTrain();
+
+ protected:
+  virtual int ReceiveFromClient(int msg_type,
+                                int client_id,
+                                const std::string& msg);
+};
+class SlotRecordDataset : public DatasetImpl<SlotRecord> {
+ public:
+  SlotRecordDataset() { SlotRecordPool(); }
+  virtual ~SlotRecordDataset() {}
+  // create input channel
+  virtual void CreateChannel();
+  // create readers
+  virtual void CreateReaders();
+  // release memory
+  virtual void ReleaseMemory();
+  virtual void GlobalShuffle(int thread_num = -1);
+  virtual void DynamicAdjustChannelNum(int channel_num,
+                                       bool discard_remaining_ins);
+  virtual void PrepareTrain();
+  virtual void DynamicAdjustReadersNum(int thread_num);
+
+ protected:
+  bool enable_heterps_ = true;
 };
 
 #ifdef PADDLE_WITH_BOX_PS
@@ -396,6 +483,7 @@ class PadBoxSlotDataset : public DatasetImpl<SlotRecord> {
   virtual void PreLoadIntoDisk(const std::string& path, const int file_num);
   virtual void WaitLoadDiskDone(void);
   virtual void SetLoadArchiveFile(bool archive) { is_archive_file_ = archive; }
+
 
  protected:
   // shuffle data
@@ -484,6 +572,5 @@ class InputTableDataset : public PadBoxSlotDataset {
   std::vector<std::string> index_filelist_;
 };
 #endif
-
 }  // end namespace framework
 }  // end namespace paddle

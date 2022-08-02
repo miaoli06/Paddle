@@ -14,7 +14,11 @@ limitations under the License. */
 #if defined(PADDLE_WITH_NCCL)
 #include <nccl.h>
 #endif
+#if defined(PADDLE_WITH_RCCL)
+#include <rccl.h>
+#endif
 #include <stdint.h>
+
 #include <ostream>
 #include <string>
 
@@ -22,11 +26,11 @@ limitations under the License. */
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/threadpool.h"
-#include "paddle/fluid/operators/distributed/distributed.h"
-#include "paddle/fluid/operators/distributed/request_handler_impl.h"
-#if defined(PADDLE_WITH_NCCL)
+// #include "paddle/fluid/operators/distributed/distributed.h"
+// #include "paddle/fluid/operators/distributed/request_handler_impl.h"
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #endif
 
 namespace paddle {
@@ -49,8 +53,9 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
   void RunImpl(const framework::Scope& scope,
                const platform::Place& place) const override {
     auto var = scope.FindVar(Input("X"));
-    PADDLE_ENFORCE_NOT_NULL(var);
-#if defined(PADDLE_WITH_NCCL)
+    PADDLE_ENFORCE_NOT_NULL(
+        var, platform::errors::InvalidArgument("Input X must be provided."));
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     ncclUniqueId* nccl_id = var->GetMutable<ncclUniqueId>();
 
     int ntrainers = Attr<int>("ntrainers");
@@ -58,13 +63,15 @@ class CCommInitMultiTrainerOp : public framework::OperatorBase {
     int rid = Attr<int>("ring_id");
 
     std::vector<int> devices = Attr<std::vector<int>>("devices");
+
     if (devices.empty()) {
       devices = platform::GetSelectedDevices();
     }
     platform::NCCLCommContext::Instance().CreateNCCLCommMultiTrainer(
         devices, nccl_id, ntrainers, train_id, rid);
 #else
-    PADDLE_THROW("PaddlePaddle should compile with GPU.");
+    PADDLE_THROW(platform::errors::Unimplemented(
+        "PaddlePaddle should compile with GPU."));
 #endif
   }
 };
@@ -96,6 +103,7 @@ Initialize collective communicatoin context within this trainer
 
 namespace ops = paddle::operators;
 
-REGISTER_OPERATOR(c_comm_init_multitrainer, ops::CCommInitMultiTrainerOp,
+REGISTER_OPERATOR(c_comm_init_multitrainer,
+                  ops::CCommInitMultiTrainerOp,
                   ops::CCommInitMultiTrainerInferShape,
                   ops::CCommInitMultiTrainerOpMaker);
