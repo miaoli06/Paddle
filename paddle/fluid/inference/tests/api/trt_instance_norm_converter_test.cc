@@ -12,10 +12,10 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include "gflags/gflags.h"
 #include "paddle/fluid/inference/tests/api/trt_test_helper.h"
 
 namespace paddle {
@@ -28,8 +28,8 @@ TEST(TensorRT, instance_norm) {
   config.EnableUseGpu(100, 0);
   config.SetModel(model_dir);
   config.SwitchUseFeedFetchOps(false);
-  config.EnableTensorRtEngine(1 << 20, batch_size, 0,
-                              AnalysisConfig::Precision::kFloat32, false);
+  config.EnableTensorRtEngine(
+      1 << 20, batch_size, 0, AnalysisConfig::Precision::kFloat32, false);
 
   auto predictor = CreatePaddlePredictor(config);
 

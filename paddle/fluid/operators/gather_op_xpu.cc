@@ -13,75 +13,112 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #ifdef PADDLE_WITH_XPU
-#include "paddle/fluid/operators/gather_op.h"
 #include <memory>
 #include <string>
 #include <vector>
-#include "paddle/fluid/framework/ddim.h"
+
+#include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/op_version_registry.h"
+#include "paddle/phi/core/ddim.h"
 namespace paddle {
 namespace operators {
 
+using Tensor = framework::Tensor;
+
 template <typename T>
 class GatherOpXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     PADDLE_ENFORCE_EQ(
-        platform::is_xpu_place(ctx.GetPlace()), true,
+        platform::is_xpu_place(ctx.GetPlace()),
+        true,
         platform::errors::PreconditionNotMet("This kernel only runs on XPU."));
 
     auto *x = ctx.Input<Tensor>("X");
     auto *index = ctx.Input<Tensor>("Index");
     auto *output = ctx.Output<Tensor>("Out");
+
+    int axis = ctx.Attr<int>("axis");
     if (ctx.HasInput("Axis")) {
-      PADDLE_THROW(platform::errors::InvalidArgument(
-          "Now, it doesn't support XPU with Axis."));
+      Tensor cpu_axis;
+      const Tensor *axis_tensor = ctx.Input<Tensor>("Axis");
+      framework::TensorCopy(*axis_tensor, platform::CPUPlace(), &cpu_axis);
+      const auto &axis_type = axis_tensor->dtype();
+      if (framework::TransToProtoVarType(axis_type) ==
+          framework::proto::VarType::INT32) {
+        axis = static_cast<int>(cpu_axis.data<int32_t>()[0]);
+      } else if (framework::TransToProtoVarType(axis_type) ==
+                 framework::proto::VarType::INT64) {
+        axis = static_cast<int>(cpu_axis.data<int64_t>()[0]);
+      }
     }
 
     output->mutable_data<T>(ctx.GetPlace());
     if (x->numel() == 0) return;
-    // check index type is INT32
-    const auto &index_type = index->type();
-    bool index_type_match = index_type == framework::proto::VarType::INT32;
-    PADDLE_ENFORCE_EQ(
-        index_type_match, true,
-        platform::errors::InvalidArgument(
-            "XPU only support INT32, it holds %s, but desires to be %s",
-            paddle::framework::DataTypeToString(index_type),
-            paddle::framework::DataTypeToString(
-                framework::proto::VarType::INT32)));
 
     const auto index_dims = index->dims();
     if (index_dims.size() == 2) {
       PADDLE_ENFORCE_EQ(
-          index_dims[1], 1,
+          index_dims[1],
+          1,
           platform::errors::InvalidArgument(
               "The last dim of index should be 1 when it is 2D, but we get %d",
               index_dims[1]));
     } else {
       PADDLE_ENFORCE_EQ(
-          index_dims.size(), 1,
+          index_dims.size(),
+          1,
           platform::errors::InvalidArgument(
               "The index should be 1D, when it is not 2D, but we get %d",
               index_dims.size()));
     }
-    int slice_size = x->numel() / x->dims()[0];
+    std::vector<int> xshape(x->dims().size());
+    for (int i = 0; i < x->dims().size(); ++i) {
+      xshape[i] = x->dims()[i];
+    }
+
     auto &dev_ctx = ctx.template device_context<platform::XPUDeviceContext>();
-    int r =
-        xpu::gather<T>(dev_ctx.x_context(), x->data<T>(), index->data<int>(),
-                       index->dims()[0], slice_size, output->data<T>());
-    PADDLE_ENFORCE_EQ(
-        r, xpu::Error_t::SUCCESS,
-        platform::errors::External("XPU kernel error! error code=%d", r));
+    int r = XPU_SUCCESS;
+    if (framework::TransToProtoVarType(index->dtype()) ==
+        framework::proto::VarType::INT32) {
+      r = xpu::gather<XPUType, int>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(x->data<T>()),
+          index->data<int>(),
+          reinterpret_cast<XPUType *>(output->data<T>()),
+          xshape,
+          index->dims()[0],
+          axis);
+    } else {
+      r = xpu::gather<XPUType, int64_t>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(x->data<T>()),
+          index->data<int64_t>(),
+          reinterpret_cast<XPUType *>(output->data<T>()),
+          xshape,
+          index->dims()[0],
+          axis);
+    }
+    PADDLE_ENFORCE_EQ(r,
+                      xpu::Error_t::SUCCESS,
+                      platform::errors::External(
+                          "XPU gather kernel return wrong value[%d %s]",
+                          r,
+                          XPUAPIErrorMsg[r]));
   }
 };
 
 template <typename T>
 class GatherGradOpXPUKernel : public framework::OpKernel<T> {
+  using XPUType = typename XPUTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     PADDLE_ENFORCE_EQ(
-        platform::is_xpu_place(ctx.GetPlace()), true,
+        platform::is_xpu_place(ctx.GetPlace()),
+        true,
         platform::errors::PreconditionNotMet("This kernel only runs on XPU."));
 
     auto *index = ctx.Input<Tensor>("Index");
@@ -89,58 +126,92 @@ class GatherGradOpXPUKernel : public framework::OpKernel<T> {
     auto *dout = ctx.Input<Tensor>(framework::GradVarName("Out"));
     auto &dev_ctx = ctx.template device_context<platform::XPUDeviceContext>();
 
+    int axis = ctx.Attr<int>("axis");
     if (ctx.HasInput("Axis")) {
-      PADDLE_THROW(platform::errors::InvalidArgument(
-          "Now, it doesn't support XPU with Axis."));
+      Tensor cpu_axis;
+      const Tensor *axis_tensor = ctx.Input<Tensor>("Axis");
+      framework::TensorCopy(*axis_tensor, platform::CPUPlace(), &cpu_axis);
+      const auto &axis_type = axis_tensor->dtype();
+      if (framework::TransToProtoVarType(axis_type) ==
+          framework::proto::VarType::INT32) {
+        axis = static_cast<int>(cpu_axis.data<int32_t>()[0]);
+      } else if (framework::TransToProtoVarType(axis_type) ==
+                 framework::proto::VarType::INT64) {
+        axis = static_cast<int>(cpu_axis.data<int64_t>()[0]);
+      }
     }
-
-    dx->mutable_data<T>(ctx.GetPlace());
-    const int zero = 0;
-    int r_dx = xpu::memset(dev_ctx.x_context(), dx->data<T>(), zero,
-                           dx->numel() * sizeof(T));
-    PADDLE_ENFORCE_EQ(
-        r_dx, xpu::Error_t::SUCCESS,
-        platform::errors::External("XPU kernel error! error code=%d", r_dx));
-
     if (dout->numel() == 0) {
       return;
     }
-    bool overwrite = ctx.Attr<bool>("overwrite");
-    // check index type is INT32
-    const auto &index_type = index->type();
-    bool index_type_match = index_type == framework::proto::VarType::INT32;
-    PADDLE_ENFORCE_EQ(
-        index_type_match, true,
-        platform::errors::InvalidArgument(
-            "XPU only support INT32, it holds %s, but desires to be %s",
-            paddle::framework::DataTypeToString(index_type),
-            paddle::framework::DataTypeToString(
-                framework::proto::VarType::INT32)));
 
+    bool overwrite = ctx.Attr<bool>("overwrite");
     const auto index_dims = index->dims();
     if (index_dims.size() == 2) {
       PADDLE_ENFORCE_EQ(
-          index_dims[1], 1,
+          index_dims[1],
+          1,
           platform::errors::InvalidArgument(
               "The last dim of index should be 1 when it is 2D, but we get %d",
               index_dims[1]));
     } else {
       PADDLE_ENFORCE_EQ(
-          index_dims.size(), 1,
+          index_dims.size(),
+          1,
           platform::errors::InvalidArgument(
               "The index should be 1D, when it is not 2D, but we get %d",
               index_dims.size()));
     }
+    std::vector<int> xshape(dx->dims().size());
+    for (int i = 0; i < dx->dims().size(); ++i) {
+      xshape[i] = dx->dims()[i];
+    }
 
-    int index_size = index_dims[0];
-    int slice_size = dout->numel() / dout->dims()[0];
+    dx->mutable_data<T>(ctx.GetPlace());
 
-    int r = xpu::scatter<T>(dev_ctx.x_context(), dout->data<T>(),
-                            index->data<int>(), index_size, slice_size,
-                            dx->data<T>(), overwrite);
-    PADDLE_ENFORCE_EQ(
-        r, xpu::Error_t::SUCCESS,
-        platform::errors::External("XPU kernel error! error code=%d", r));
+    int r = XPU_SUCCESS;
+    if (framework::TransToProtoVarType(index->dtype()) ==
+        framework::proto::VarType::INT32) {
+      r = xpu::gather_grad<XPUType, int>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(dout->data<T>()),
+          index->data<int>(),
+          reinterpret_cast<XPUType *>(dx->data<T>()),
+          xshape,
+          index->dims()[0],
+          axis,
+          overwrite);
+    } else {
+      xpu::ctx_guard RAII_GUARD(dev_ctx.x_context());
+      int *index_int_ptr_l3 =
+          RAII_GUARD.alloc_l3_or_gm<int32_t>(index->numel());
+      r = xpu::cast_v2<int64_t, int32_t>(dev_ctx.x_context(),
+                                         index->data<int64_t>(),
+                                         index_int_ptr_l3,
+                                         index->numel());
+      PADDLE_ENFORCE_EQ(
+          r,
+          XPU_SUCCESS,
+          platform::errors::External("XPU API(cast_v2) return wrong "
+                                     "value[%d %s]",
+                                     r,
+                                     XPUAPIErrorMsg[r]));
+
+      r = xpu::gather_grad<XPUType, int>(
+          dev_ctx.x_context(),
+          reinterpret_cast<const XPUType *>(dout->data<T>()),
+          index_int_ptr_l3,
+          reinterpret_cast<XPUType *>(dx->data<T>()),
+          xshape,
+          index->dims()[0],
+          axis,
+          overwrite);
+    }
+    PADDLE_ENFORCE_EQ(r,
+                      xpu::Error_t::SUCCESS,
+                      platform::errors::External(
+                          "XPU gather grad kernel return wrong value[%d %s]",
+                          r,
+                          XPUAPIErrorMsg[r]));
   }
 };
 
@@ -148,6 +219,10 @@ class GatherGradOpXPUKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OP_XPU_KERNEL(gather, ops::GatherOpXPUKernel<float>);
-REGISTER_OP_XPU_KERNEL(gather_grad, ops::GatherGradOpXPUKernel<float>);
+REGISTER_OP_XPU_KERNEL(gather,
+                       ops::GatherOpXPUKernel<float>,
+                       ops::GatherOpXPUKernel<paddle::platform::float16>);
+REGISTER_OP_XPU_KERNEL(gather_grad,
+                       ops::GatherGradOpXPUKernel<float>,
+                       ops::GatherGradOpXPUKernel<paddle::platform::float16>);
 #endif

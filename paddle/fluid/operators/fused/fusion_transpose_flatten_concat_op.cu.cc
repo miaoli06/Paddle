@@ -13,14 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/operators/fused/fusion_transpose_flatten_concat_op.h"
-#include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/platform/cudnn_helper.h"
 
-namespace paddle {
-namespace platform {
-struct CUDAPlace;
-}  // namespace platform
-}  // namespace paddle
+#include "paddle/fluid/framework/op_registry.h"
+#include "paddle/fluid/platform/device/gpu/gpu_dnn.h"
+#include "paddle/fluid/platform/place.h"
 
 namespace paddle {
 namespace operators {
@@ -50,13 +46,13 @@ class TransposeFlattenConcatFusionKernel : public framework::OpKernel<T> {
 
     cudnnTensorDescriptor_t in_desc;
     cudnnTensorDescriptor_t out_desc;
-    PADDLE_ENFORCE_CUDA_SUCCESS(
+    PADDLE_ENFORCE_GPU_SUCCESS(
         platform::dynload::cudnnCreateTensorDescriptor(&in_desc));
-    PADDLE_ENFORCE_CUDA_SUCCESS(
+    PADDLE_ENFORCE_GPU_SUCCESS(
         platform::dynload::cudnnCreateTensorDescriptor(&out_desc));
     cudnnDataType_t cudnn_dtype = CudnnDataType<T>::type;
 
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto& dev_ctx = ctx.template device_context<phi::GPUContext>();
     auto handle = dev_ctx.cudnn_handle();
 
     T* odata = out->data<T>();
@@ -92,15 +88,19 @@ class TransposeFlattenConcatFusionKernel : public framework::OpKernel<T> {
         dims_y[i] = 1;
       }
 
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnSetTensorNdDescriptor(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnSetTensorNdDescriptor(
           in_desc, cudnn_dtype, max_dim, dims_y.data(), stride_x.data()));
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnSetTensorNdDescriptor(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnSetTensorNdDescriptor(
           out_desc, cudnn_dtype, max_dim, dims_y.data(), stride_y.data()));
 
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnTransformTensor(
-          handle, CudnnDataType<T>::kOne(), in_desc,
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnTransformTensor(
+          handle,
+          CudnnDataType<T>::kOne(),
+          in_desc,
           static_cast<const void*>(ins[k]->data<T>()),
-          CudnnDataType<T>::kZero(), out_desc, static_cast<void*>(odata)));
+          CudnnDataType<T>::kZero(),
+          out_desc,
+          static_cast<void*>(odata)));
       if (concat_axis == 0) {
         odata += osize;
       } else {
@@ -108,9 +108,9 @@ class TransposeFlattenConcatFusionKernel : public framework::OpKernel<T> {
         odata += flat_shape[1];
       }
     }
-    PADDLE_ENFORCE_CUDA_SUCCESS(
+    PADDLE_ENFORCE_GPU_SUCCESS(
         platform::dynload::cudnnDestroyTensorDescriptor(in_desc));
-    PADDLE_ENFORCE_CUDA_SUCCESS(
+    PADDLE_ENFORCE_GPU_SUCCESS(
         platform::dynload::cudnnDestroyTensorDescriptor(out_desc));
   }
 };

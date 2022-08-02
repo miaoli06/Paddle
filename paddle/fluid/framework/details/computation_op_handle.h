@@ -28,6 +28,7 @@ namespace paddle {
 namespace framework {
 class OperatorBase;
 class Scope;
+
 namespace ir {
 class Node;
 }  // namespace ir
@@ -41,7 +42,9 @@ struct VarHandleBase;
 
 class ComputationOpHandle : public OpHandleBase {
  public:
-  ComputationOpHandle(ir::Node *node, Scope *scope, platform::Place place,
+  ComputationOpHandle(ir::Node *node,
+                      Scope *scope,
+                      platform::Place place,
                       size_t scope_idx);
 
   OperatorBase *GetOp() { return op_.get(); }

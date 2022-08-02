@@ -27,17 +27,22 @@ limitations under the License. */
 #include "glog/logging.h"  // For VLOG
 #include "paddle/fluid/framework/attribute.h"
 #include "paddle/fluid/framework/block_desc.h"
-#include "paddle/fluid/framework/framework.pb.h"
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_info.h"
 #include "paddle/fluid/framework/op_kernel_type.h"
+#include "paddle/fluid/framework/phi_utils.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/framework/selected_rows.h"
+#include "paddle/fluid/framework/selected_rows_utils.h"
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/unused_var_check.h"
 #include "paddle/fluid/memory/malloc.h"
 #include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/variant.h"
+
+#include "paddle/phi/core/compat/arg_map_context.h"
+#include "paddle/phi/core/compat/op_utils.h"
+#include "paddle/phi/core/kernel_factory.h"
+#include "paddle/utils/flat_hash_map.h"
 
 namespace paddle {
 namespace framework {
@@ -47,6 +52,10 @@ class Scope;
 class Variable;
 }  // namespace framework
 }  // namespace paddle
+
+namespace phi {
+class KernelContext;
+}
 
 DECLARE_int32(inner_op_parallelism);
 
@@ -111,6 +120,10 @@ inline std::string GradOriginalVarName(const std::string& grad_var_name) {
   }
 }
 
+inline bool VarIsTensor(const Variable& var) {
+  return var.IsType<LoDTensor>() || var.IsType<phi::SelectedRows>();
+}
+
 const Tensor* GetLoDTensorOrSelectedRowsValueFromVar(const Variable& var);
 Tensor* GetMutableLoDTensorOrSelectedRowsValueFromVar(Variable* var);
 
@@ -120,7 +133,8 @@ class OperatorBase;
 class RuntimeContext {
  public:
   RuntimeContext(const VariableNameMap& innames,
-                 const VariableNameMap& outnames, const Scope& scope);
+                 const VariableNameMap& outnames,
+                 const Scope& scope);
 
   RuntimeContext(const VariableValueMap& invars,
                  const VariableValueMap& outvars)
@@ -138,8 +152,10 @@ class RuntimeContext {
  */
 class OperatorBase {
  public:
-  OperatorBase(const std::string& type, const VariableNameMap& inputs,
-               const VariableNameMap& outputs, const AttributeMap& attrs);
+  OperatorBase(const std::string& type,
+               const VariableNameMap& inputs,
+               const VariableNameMap& outputs,
+               const AttributeMap& attrs);
 
   virtual ~OperatorBase() {}
 
@@ -151,12 +167,13 @@ class OperatorBase {
   virtual void Stop() {}
 
   /// if scope is not null, also show dimensions of arguments
-  virtual std::string DebugStringEx(const Scope* scope) const;
+  virtual std::string DebugStringEx(const ScopeBase* scope) const;
   std::string DebugString() const { return DebugStringEx(nullptr); }
 
   virtual bool SupportGPU() const { return false; }
-
-  virtual bool SupportsMKLDNN() const { return false; }
+  virtual bool SupportNPU() const { return false; }
+  virtual bool SupportMLU() const { return false; }
+  virtual bool SupportXPU() const { return false; }
 
   const std::string& Type() const { return type_; }
 
@@ -164,13 +181,15 @@ class OperatorBase {
   template <typename T>
   inline const T& Attr(const std::string& name) const {
     PADDLE_ENFORCE_NE(
-        attrs_.find(name), attrs_.end(),
+        attrs_.find(name),
+        attrs_.end(),
         platform::errors::NotFound("(%s) is not found in AttributeMap.", name));
-    return BOOST_GET_CONST(T, attrs_.at(name));
+    return PADDLE_GET_CONST(T, attrs_.at(name));
   }
   void SetAttr(const std::string& name, const Attribute& v) {
     PADDLE_ENFORCE_EQ(
-        HasAttr(name), true,
+        HasAttr(name),
+        true,
         platform::errors::NotFound(
             "The attribute %s is not found in operator %s", name, Type()));
 
@@ -180,11 +199,14 @@ class OperatorBase {
 
   const VariableNameMap& Inputs() const { return inputs_; }
   const VariableNameMap& Outputs() const { return outputs_; }
+  VariableNameMap& Inputs() { return inputs_; }
+  VariableNameMap& Outputs() { return outputs_; }
 
   const OpInfo& Info() const {
     PADDLE_ENFORCE_NOT_NULL(
-        info_, platform::errors::NotFound(
-                   "OpInfo of operator (%s) is not found.", type_));
+        info_,
+        platform::errors::NotFound("OpInfo of operator (%s) is not found.",
+                                   type_));
     return *info_;
   }
 
@@ -244,7 +266,8 @@ class OperatorBase {
 
 class ExecutionContext {
  public:
-  ExecutionContext(const OperatorBase& op, const Scope& scope,
+  ExecutionContext(const OperatorBase& op,
+                   const Scope& scope,
                    const platform::DeviceContext& device_context,
                    const RuntimeContext& ctx)
       : op_(op), scope_(scope), device_context_(device_context), ctx_(ctx) {}
@@ -275,7 +298,7 @@ class ExecutionContext {
 
   template <typename T>
   inline const T& Attr(const std::string& name) const {
-    return BOOST_GET_CONST(T, GetAttr(name));
+    return PADDLE_GET_CONST(T, GetAttr(name));
   }
 
   virtual const Attribute& GetAttr(const std::string& name) const {
@@ -283,6 +306,8 @@ class ExecutionContext {
   }
 
   virtual bool HasInput(const std::string& name) const;
+
+  virtual bool HasInputs(const std::string& name) const;
 
   virtual bool HasOutput(const std::string& name) const;
 
@@ -317,12 +342,12 @@ class ExecutionContext {
     return it->second;
   }
 
-  virtual std::vector<std::string> InNameList() const {
-    std::vector<std::string> vec_temp;
+  virtual paddle::small_vector<const std::string*> InNameList() const {
+    paddle::small_vector<const std::string*> vec_temp;
     vec_temp.reserve(ctx_.inputs.size());
 
     for (auto& input : ctx_.inputs) {
-      vec_temp.push_back(input.first);
+      vec_temp.push_back(&input.first);
     }
 
     return vec_temp;
@@ -350,7 +375,9 @@ class ExecutionContext {
     }
     std::vector<const T*> res;
     res.reserve(vars.size());
-    std::transform(vars.begin(), vars.end(), std::back_inserter(res),
+    std::transform(vars.begin(),
+                   vars.end(),
+                   std::back_inserter(res),
                    [&](const Variable* var) -> const T* {
                      return var == nullptr ? nullptr : &var->Get<T>();
                    });
@@ -367,7 +394,9 @@ class ExecutionContext {
 
     std::vector<T*> res;
     res.reserve(vars.size());
-    std::transform(vars.begin(), vars.end(), std::back_inserter(res),
+    std::transform(vars.begin(),
+                   vars.end(),
+                   std::back_inserter(res),
                    [&](Variable* var) -> T* {
                      return var == nullptr ? nullptr : var->GetMutable<T>();
                    });
@@ -386,13 +415,13 @@ class ExecutionContext {
     return device_context_;
   }
 
-#ifdef PADDLE_WITH_CUDA
-  const inline platform::CUDADeviceContext& cuda_device_context() const {
-    PADDLE_ENFORCE_EQ(platform::is_gpu_place(device_context_.GetPlace()), true,
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  const inline phi::GPUContext& cuda_device_context() const {
+    PADDLE_ENFORCE_EQ(platform::is_gpu_place(device_context_.GetPlace()),
+                      true,
                       platform::errors::PreconditionNotMet(
                           "Current device context place is not GPUPlace."));
-    return *reinterpret_cast<const platform::CUDADeviceContext*>(
-        &device_context_);
+    return *reinterpret_cast<const phi::GPUContext*>(&device_context_);
   }
 #endif
 
@@ -402,18 +431,20 @@ class ExecutionContext {
     auto tmp_allocation_ptr = memory::Alloc(dev_ctx, product(dim) * sizeof(T));
     auto& deleter = tmp_allocation_ptr.get_deleter();
     auto* allocation_ptr = tmp_allocation_ptr.release();
-    auto shared_allocation = std::shared_ptr<memory::allocation::Allocation>(
-        allocation_ptr, deleter);
+    auto shared_allocation =
+        std::shared_ptr<phi::Allocation>(allocation_ptr, deleter);
 
     PADDLE_ENFORCE_GE(
-        allocation_ptr->size(), framework::product(dim) * sizeof(T),
+        allocation_ptr->size(),
+        phi::product(dim) * sizeof(T),
         platform::errors::PreconditionNotMet(
             "The data memory size(%d) is less than the tensor needed memory "
             "size(%d).",
-            allocation_ptr->size(), framework::product(dim) * sizeof(T)));
+            allocation_ptr->size(),
+            phi::product(dim) * sizeof(T)));
 
-    paddle::framework::Tensor temp_tensor(
-        framework::ToDataType(std::type_index(typeid(T))));
+    paddle::framework::Tensor temp_tensor(framework::TransToPhiDataType(
+        framework::ToDataType(std::type_index(typeid(T)))));
     temp_tensor.Resize(dim);
     temp_tensor.ResetHolder(std::move(shared_allocation));
     return temp_tensor;
@@ -422,6 +453,7 @@ class ExecutionContext {
   const RuntimeContext Context() const { return ctx_; }
 
   std::string DebugString() const { return op_.DebugString(); }
+  const OperatorBase& GetOp() const { return op_; }
 
  private:
   const OperatorBase& op_;
@@ -430,15 +462,84 @@ class ExecutionContext {
   const RuntimeContext& ctx_;
 };
 
-template <>
-const Tensor* ExecutionContext::Input<Tensor>(const std::string& name) const;
+// TODO(chenweihang): split impl based OpProto or Dygraph if needed
+class ExecutionArgumentMappingContext : public phi::ArgumentMappingContext {
+ public:
+  explicit ExecutionArgumentMappingContext(const ExecutionContext& ctx)
+      : ctx_(ctx) {}
+
+  bool HasInput(const std::string& name) const override {
+    return ctx_.HasInputs(name);
+  }
+
+  bool HasOutput(const std::string& name) const override {
+    return ctx_.HasOutput(name);
+  }
+
+  bool HasAttr(const std::string& name) const override {
+    return ctx_.HasAttr(name);
+  }
+
+  paddle::any Attr(const std::string& name) const override {
+    auto& attr = ctx_.GetAttr(name);
+    return GetAttrValue(attr);
+  }
+
+  size_t InputSize(const std::string& name) const override {
+    return ctx_.MultiInputVar(name).size();
+  }
+
+  size_t OutputSize(const std::string& name) const override {
+    return ctx_.MultiOutputVar(name).size();
+  }
+
+  bool IsDenseTensorInput(const std::string& name) const override {
+    const auto* var = ctx_.InputVar(name);
+    return var->IsType<phi::DenseTensor>();
+  }
+
+  bool IsDenseTensorInputs(const std::string& name) const override {
+    auto vars = ctx_.MultiInputVar(name);
+    return std::all_of(vars.begin(), vars.end(), [](const Variable* var) {
+      return var->IsType<phi::DenseTensor>();
+    });
+  }
+
+  bool IsSelectedRowsInput(const std::string& name) const override {
+    const auto* var = ctx_.InputVar(name);
+    return var->IsType<phi::SelectedRows>();
+  }
+
+  bool IsDenseTensorVectorInput(const std::string& name) const override {
+    auto vars = ctx_.MultiInputVar(name);
+    return std::all_of(vars.begin(), vars.end(), [](const Variable* var) {
+      return var->IsType<framework::LoDTensorArray>();
+    });
+  }
+
+  bool IsDenseTensorOutput(const std::string& name) const override {
+    auto vars = ctx_.MultiOutputVar(name);
+    return std::all_of(vars.begin(), vars.end(), [](const Variable* var) {
+      return var->IsType<phi::DenseTensor>();
+    });
+  }
+
+  bool IsSelectedRowsOutput(const std::string& name) const override {
+    auto vars = ctx_.MultiOutputVar(name);
+    return std::all_of(vars.begin(), vars.end(), [](const Variable* var) {
+      return var->IsType<phi::SelectedRows>();
+    });
+  }
+
+  bool IsForInferShape() const override { return false; }
+
+ private:
+  const ExecutionContext& ctx_;
+};
 
 template <>
 const std::vector<const Tensor*> ExecutionContext::MultiInput<Tensor>(
     const std::string& name) const;
-
-template <>
-Tensor* ExecutionContext::Output<Tensor>(const std::string& name) const;
 
 template <>
 std::vector<Tensor*> ExecutionContext::MultiOutput<Tensor>(
@@ -470,42 +571,53 @@ class OperatorWithKernel : public OperatorBase {
   using OpKernelMap =
       std::unordered_map<OpKernelType, OpKernelFunc, OpKernelType::Hash>;
 
-  OperatorWithKernel(const std::string& type, const VariableNameMap& inputs,
-                     const VariableNameMap& outputs, const AttributeMap& attrs)
+  OperatorWithKernel(const std::string& type,
+                     const VariableNameMap& inputs,
+                     const VariableNameMap& outputs,
+                     const AttributeMap& attrs)
       : OperatorBase(type, inputs, outputs, attrs) {}
 
-  static std::unordered_map<std::string /* op_type */, OpKernelMap>&
+  static paddle::flat_hash_map<std::string /* op_type */, OpKernelMap>&
   AllOpKernels() {
-    static std::unordered_map<std::string, OpKernelMap> g_all_op_kernels;
+    static paddle::flat_hash_map<std::string, OpKernelMap> g_all_op_kernels;
     return g_all_op_kernels;
   }
 
-  bool IsMKLDNNType() const {
-    return ((this->kernel_type_) && (this->kernel_type_->data_layout_ ==
-                                     framework::DataLayout::kMKLDNN));
-  }
+  bool SupportGPU() const override;
 
-  bool SupportGPU() const override {
+  bool SupportNPU() const override;
+
+  bool SupportMLU() const override {
+    // TODO(zhiqiu): support phi if needed?
     auto& op_kernels = OperatorWithKernel::AllOpKernels().at(type_);
-    return std::any_of(op_kernels.begin(), op_kernels.end(),
+    return std::any_of(op_kernels.begin(),
+                       op_kernels.end(),
                        [](OpKernelMap::const_reference kern_pair) {
-                         return platform::is_gpu_place(kern_pair.first.place_);
+                         return platform::is_mlu_place(kern_pair.first.place_);
                        });
   }
-  bool SupportsMKLDNN() const override;
 
-  bool CanMKLDNNBeUsed(const framework::ExecutionContext& ctx) const;
+  bool SupportXPU() const override;
 
-  virtual void InferShape(InferShapeContext* ctx) const = 0;
+  bool SupportsMKLDNN(proto::VarType::Type data_type) const;
 
-  void RuntimeInferShape(const Scope& scope, const platform::Place& place,
+  bool SupportsKernelType(const OpKernelType& kernel_type) const;
+
+  bool CanMKLDNNBeUsed(const framework::ExecutionContext& ctx,
+                       proto::VarType::Type data_type) const;
+
+  virtual void InferShape(InferShapeContext* ctx) const;
+
+  void RuntimeInferShape(const Scope& scope,
+                         const platform::Place& place,
                          const RuntimeContext& ctx) const override;
 
   proto::VarType::Type IndicateVarDataType(const ExecutionContext& ctx,
                                            const std::string& name) const;
 
   proto::VarType::Type IndicateOrPromoteVarDataTypes(
-      const ExecutionContext& ctx, const std::string& name1,
+      const ExecutionContext& ctx,
+      const std::string& name1,
       const std::string& name2) const;
 
   virtual OpKernelType GetExpectedKernelType(const ExecutionContext& ctx) const;
@@ -513,7 +625,8 @@ class OperatorWithKernel : public OperatorBase {
   // change this to public so that in dygraph mode we can call it to check if we
   // need transform data
   virtual OpKernelType GetKernelTypeForVar(
-      const std::string& var_name, const Tensor& tensor,
+      const std::string& var_name,
+      const Tensor& tensor,
       const OpKernelType& expected_kernel_type) const;
 
   platform::Place GetExecutionPlace(
@@ -521,9 +634,47 @@ class OperatorWithKernel : public OperatorBase {
     return kernel_type_->place_;
   }
 
+  /* member functions for adapting to phi lib */
+  /** In the Tensor calculation library, the new Kernel adopts a clearer and
+   * more streamlined design. The arguments of the Kernel and the input and
+   * output arguments registered in the original OpMaker do not match in some
+   * cases, so we use map to record the arguments required by the kernel.
+   * When selecting Kernel during Op execution, select the arguments of the
+   * original Op according to the GetExpectedPhiKernelArgs returned arguments.
+   */
+  phi::KernelSignature GetExpectedPhiKernelArgs(
+      const ExecutionContext& ctx) const;
+
+  /* member functions for adapting to phi lib */
+  phi::KernelKey ChoosePhiKernel(const ExecutionContext& ctx) const;
+
+  void ChooseKernel(const ExecutionContext& ctx) const;
+
+  void BuildPhiKernelContext(const RuntimeContext& ctx,
+                             platform::DeviceContext* dev_ctx,
+                             phi::KernelContext* pt_kernel_context) const;
+
+  phi::KernelSignature* PhiKernelSignature() const {
+    return kernel_signature_.get();
+  }
+
+  phi::Kernel* PhiKernel() const { return pt_kernel_.get(); }
+
+  void ResetPhiKernel(phi::Kernel* kernel) const {
+    return pt_kernel_.reset(kernel);
+  }
+
+  const OpKernelType* kernel_type() const { return kernel_type_.get(); }
+  const OpKernelFunc* kernel_func() const { return kernel_func_.get(); }
+
+  void ResetKernelType(OpKernelType* kernel_type) {
+    kernel_type_.reset(kernel_type);
+  }
+
  private:
   void RunImpl(const Scope& scope, const platform::Place& place) const final;
-  void RunImpl(const Scope& scope, const platform::Place& place,
+  void RunImpl(const Scope& scope,
+               const platform::Place& place,
                RuntimeContext* runtime_ctx) const;
 
   /**
@@ -542,16 +693,22 @@ class OperatorWithKernel : public OperatorBase {
                                const std::vector<std::string>& inplace_vars,
                                const Scope& exec_scope) const;
 
-  void ChooseKernel(const RuntimeContext& ctx, const Scope& scope,
-                    const platform::Place& place) const;
+  OpKernelType InnerGetExpectedKernelType(const ExecutionContext& ctx) const;
+
+  void HandleComplexGradToRealGrad(const Scope& scope,
+                                   RuntimeContext* ctx) const;
 
   /* Inner assist methods */
   // indicate kernel DataType by input data.
   // By default all input data must be same.
   proto::VarType::Type IndicateDataType(const ExecutionContext& ctx) const;
   // used for IndicateDataType
-  void ParseInputDataType(const ExecutionContext& ctx, const std::string& name,
-                          proto::VarType::Type* type) const;
+  void ParseInputDataType(const Variable* vars,
+                          const std::string& name,
+                          proto::VarType::Type* data_type) const;
+  void ParseMultiInputDataType(const std::vector<Variable*>& vars,
+                               const std::string& name,
+                               proto::VarType::Type* data_type) const;
   // used for IndicateOrPromoteVarDataTypes
   Tensor* GetTensorFormInputSafely(const ExecutionContext& ctx,
                                    const std::string& name) const;
@@ -562,10 +719,22 @@ class OperatorWithKernel : public OperatorBase {
   mutable std::unique_ptr<RuntimeContext> runtime_ctx_;
   mutable const Scope* pre_scope_ = nullptr;
   mutable bool need_prepare_data_ = true;
+  mutable bool need_prepare_phi_data_ = false;
   mutable bool enable_cache_runtime_context_ = false;
   mutable bool all_kernels_must_compute_runtime_shape_ = false;
   mutable std::mutex cache_update_mutex_;
   mutable bool enable_cache_transfer_scope_ = false;
+  // NOTE(chenweihang): Similar op members are used to adapt to
+  // new phi kernel, if there is a better design in the future,
+  // we may polish the implementation here
+  mutable bool run_phi_kernel_ = false;
+  mutable bool run_kp_kernel = false;
+  mutable std::unique_ptr<phi::KernelSignature> kernel_signature_;
+  mutable std::unique_ptr<phi::Kernel> pt_kernel_;
+  mutable std::unique_ptr<phi::ArgumentMappingFn> arg_map_fn_;
+
+  struct CacheImpl;
+  mutable CacheImpl* impl_{nullptr};
 };
 
 extern bool OpSupportGPU(const std::string& op_type);

@@ -15,9 +15,13 @@ limitations under the License. */
 #pragma once
 #include <cstdio>
 #include <vector>
+#ifdef __NVCC__
 #include "cub/cub.cuh"
+#endif
+#ifdef __HIPCC__
+#include <hipcub/hipcub.hpp>
+#endif
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/tensor_formatter.h"
 #include "paddle/fluid/operators/top_k_function_cuda.h"
 #include "paddle/fluid/operators/top_k_op.h"
 #include "paddle/fluid/platform/float16.h"
@@ -27,102 +31,6 @@ namespace paddle {
 namespace operators {
 
 using Tensor = framework::Tensor;
-
-template <typename T>
-struct MoreCompare {
-  __inline__ __device__ bool compare(const T& a, const T& b) const {
-    return a > b;
-  }
-};
-template <typename T>
-struct LessCompare {
-  __inline__ __device__ bool compare(const T& a, const T& b) const {
-    return a < b;
-  }
-};
-
-template <typename T>
-__global__ void FillTopKValue(const size_t N, const T* input, T* value,
-                              int64_t* indices, const int64_t num_cols) {
-  CUDA_KERNEL_LOOP(i, N) {
-    indices[i] = (i % num_cols);
-    value[i] = input[i];
-  }
-}
-template <typename T, typename Compare>
-__global__ void KernelSortTopK(const size_t num_rows, const T* input_val,
-                               T* values, int64_t* indices,
-                               const int64_t num_cols, const int K,
-                               const Compare& op) {
-  CUDA_KERNEL_LOOP(idx, num_rows) {
-    const T* in = &input_val[idx * num_cols];
-    T* val = &values[idx * K];
-    int64_t* ind = &indices[idx * K];
-
-    if (op.compare(in[0], in[1])) {
-      for (int i = 0; i < K; ++i) {
-        val[i] = in[i];
-        ind[i] = i;
-      }
-    } else {
-      for (int i = 0; i < K; ++i) {
-        int pos = (i + 1) % num_cols;
-        val[i] = in[pos];
-        ind[i] = pos;
-      }
-    }
-  }
-}
-
-// static
-// void PrintValue(const framework::Tensor* in_tensor, const std::string &name,
-// const std::string &message = "") {
-//    const framework::LoDTensor *lod_tensor = reinterpret_cast<const
-//    framework::LoDTensor *>(in_tensor);
-//    TensorFormatter formatter;
-//    formatter.SetPrintTensorType(true);
-//    formatter.SetPrintTensorShape(true);
-//    formatter.SetPrintTensorLod(true);
-//    formatter.SetPrintTensorLayout(true);
-//    formatter.SetSummarize(100);
-//    formatter.Print(*lod_tensor, name, message);
-//}
-
-// use the radix sort for the topk
-template <typename T>
-bool SortMinTopK(const platform::CUDADeviceContext& ctx,
-                 const framework::Tensor* input_tensor, const int64_t num_cols,
-                 const int64_t num_rows, const int K,
-                 framework::Tensor* out_tensor,
-                 framework::Tensor* indices_tensor, bool largest = true) {
-  auto cu_stream = ctx.stream();
-  auto place = ctx.GetPlace();
-
-  const T* input_values = input_tensor->data<T>();
-  int64_t* indices = indices_tensor->mutable_data<int64_t>(place);
-  T* values = out_tensor->mutable_data<T>(place);
-
-  // one cols
-  if (num_cols == 1) {
-    // fill index
-    FillTopKValue<<<GET_BLOCKS(num_cols * num_rows), CUDA_NUM_THREADS, 0,
-                    cu_stream>>>((num_cols * num_rows), input_values, values,
-                                 indices, num_cols);
-    return true;
-  }
-
-  if (largest) {
-    MoreCompare<T> op;
-    // Sort TopK value
-    KernelSortTopK<<<GET_BLOCKS(num_rows), CUDA_NUM_THREADS, 0, cu_stream>>>(
-        num_rows, input_values, values, indices, num_cols, K, op);
-  } else {
-    LessCompare<T> op;
-    KernelSortTopK<<<GET_BLOCKS(num_rows), CUDA_NUM_THREADS, 0, cu_stream>>>(
-        num_rows, input_values, values, indices, num_cols, K, op);
-  }
-  return true;
-}
 
 #define FIXED_BLOCK_DIM_BASE(dim, ...) \
   case (dim): {                        \
@@ -141,7 +49,8 @@ class TopkOpCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     PADDLE_ENFORCE_EQ(
-        platform::is_gpu_place(ctx.GetPlace()), true,
+        platform::is_gpu_place(ctx.GetPlace()),
+        true,
         platform::errors::InvalidArgument("It must use CUDAPlace."));
     auto* input = ctx.Input<Tensor>("X");
     auto* output = ctx.Output<Tensor>("Out");
@@ -164,24 +73,20 @@ class TopkOpCUDAKernel : public framework::OpKernel<T> {
     // FIXME(typhoonzero): data is always converted to type T?
 
     framework::DDim inputdims = input->dims();
-    const int64_t input_height = framework::product(
-        framework::slice_ddim(inputdims, 0, inputdims.size() - 1));
+    const int64_t input_height =
+        phi::product(phi::slice_ddim(inputdims, 0, inputdims.size() - 1));
     const int64_t input_width = inputdims[inputdims.size() - 1];
     const auto& dev_ctx = ctx.cuda_device_context();
     if (input_width <= 2 && k <= input_width) {
       // cols is small and large rows data
       if (SortMinTopK<T>(dev_ctx, input, input_width, input_height, k, output,
                          indices)) {
-        //            PrintValue(indices, "indices");
-        //            PrintValue(output, "values");
         return;
       }
     }
     if ((input_width <= 1024 || k >= 128 || k == input_width)) {
-      if (SortTopk<T>(dev_ctx, input, input_width, input_height, k, output,
-                      indices)) {
-        //        PrintValue(indices, "indices");
-        //        PrintValue(output, "values");
+      if (SortTopk<T>(
+              dev_ctx, input, input_width, input_height, k, output, indices)) {
         // Successed, return.
         return;
       } else {
@@ -199,10 +104,16 @@ class TopkOpCUDAKernel : public framework::OpKernel<T> {
     int gridx = input_height < kMaxHeight ? input_height : kMaxHeight;
     switch (GetDesiredBlockDim(input_width)) {
       FIXED_BLOCK_DIM(
-          KeMatrixTopK<T, 5,
-                       kBlockDim><<<gridx, kBlockDim, 0, dev_ctx.stream()>>>(
-              output_data, k, indices_data, input_data, input_width,
-              input_width, static_cast<int>(k), gridx, input_height));
+          KeMatrixTopK<T, 5, kBlockDim>
+          <<<gridx, kBlockDim, 0, dev_ctx.stream()>>>(output_data,
+                                                      k,
+                                                      indices_data,
+                                                      input_data,
+                                                      input_width,
+                                                      input_width,
+                                                      static_cast<int>(k),
+                                                      gridx,
+                                                      input_height));
       default:
         PADDLE_THROW(platform::errors::Unavailable(
             "Calculation error occurred in TopK Operator's CUDA Kernel."));
@@ -215,7 +126,8 @@ class TopkOpGradCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& context) const override {
     PADDLE_ENFORCE_EQ(
-        platform::is_gpu_place(context.GetPlace()), true,
+        platform::is_gpu_place(context.GetPlace()),
+        true,
         platform::errors::InvalidArgument("It must use CUDAPlace."));
     auto* x = context.Input<Tensor>("X");
     auto* out_grad = context.Input<Tensor>(framework::GradVarName("Out"));
@@ -229,15 +141,15 @@ class TopkOpGradCUDAKernel : public framework::OpKernel<T> {
 
     framework::DDim xdims = x->dims();
     const size_t row =
-        framework::product(framework::slice_ddim(xdims, 0, xdims.size() - 1));
+        phi::product(phi::slice_ddim(xdims, 0, xdims.size() - 1));
     const size_t col = xdims[xdims.size() - 1];
     const auto& dev_ctx = context.cuda_device_context();
     const int kMaxHeight = 2048;
     int gridx = row < kMaxHeight ? row : kMaxHeight;
     switch (GetDesiredBlockDim(col)) {
       FIXED_BLOCK_DIM(
-          AssignGrad<T, 5,
-                     kBlockDim><<<gridx, kBlockDim, 0, dev_ctx.stream()>>>(
+          AssignGrad<T, 5, kBlockDim>
+          <<<gridx, kBlockDim, 0, dev_ctx.stream()>>>(
               x_grad_data, indices_data, out_grad_data, row, col, k));
       default:
         PADDLE_THROW(
@@ -252,26 +164,18 @@ class TopkOpGradCUDAKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 REGISTER_OP_CUDA_KERNEL(
     top_k,
-    paddle::operators::TopkOpCUDAKernel<paddle::platform::CUDADeviceContext,
-                                        float>,
-    paddle::operators::TopkOpCUDAKernel<paddle::platform::CUDADeviceContext,
-                                        double>,
-    paddle::operators::TopkOpCUDAKernel<paddle::platform::CUDADeviceContext,
-                                        int>,
-    paddle::operators::TopkOpCUDAKernel<paddle::platform::CUDADeviceContext,
-                                        int64_t>,
-    paddle::operators::TopkOpCUDAKernel<paddle::platform::CUDADeviceContext,
+    paddle::operators::TopkOpCUDAKernel<phi::GPUContext, float>,
+    paddle::operators::TopkOpCUDAKernel<phi::GPUContext, double>,
+    paddle::operators::TopkOpCUDAKernel<phi::GPUContext, int>,
+    paddle::operators::TopkOpCUDAKernel<phi::GPUContext, int64_t>,
+    paddle::operators::TopkOpCUDAKernel<phi::GPUContext,
                                         paddle::platform::float16>);
 
 REGISTER_OP_CUDA_KERNEL(
     top_k_grad,
-    paddle::operators::TopkOpGradCUDAKernel<paddle::platform::CUDADeviceContext,
-                                            float>,
-    paddle::operators::TopkOpGradCUDAKernel<paddle::platform::CUDADeviceContext,
-                                            double>,
-    paddle::operators::TopkOpGradCUDAKernel<paddle::platform::CUDADeviceContext,
-                                            int>,
-    paddle::operators::TopkOpGradCUDAKernel<paddle::platform::CUDADeviceContext,
-                                            int64_t>,
-    paddle::operators::TopkOpGradCUDAKernel<paddle::platform::CUDADeviceContext,
+    paddle::operators::TopkOpGradCUDAKernel<phi::GPUContext, float>,
+    paddle::operators::TopkOpGradCUDAKernel<phi::GPUContext, double>,
+    paddle::operators::TopkOpGradCUDAKernel<phi::GPUContext, int>,
+    paddle::operators::TopkOpGradCUDAKernel<phi::GPUContext, int64_t>,
+    paddle::operators::TopkOpGradCUDAKernel<phi::GPUContext,
                                             paddle::platform::float16>);

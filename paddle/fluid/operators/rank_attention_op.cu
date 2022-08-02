@@ -12,14 +12,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <cublas.h>
 #include <algorithm>
+
 #include "paddle/fluid/framework/eigen.h"
-#include "paddle/fluid/operators/math/blas.h"
 #include "paddle/fluid/operators/rank_attention.cu.h"
 #include "paddle/fluid/operators/rank_attention_op.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
 
 namespace paddle {
 namespace operators {
@@ -108,7 +108,7 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
     //                    stream);
     //    cudaMemsetAsync(input_help_data, 0, sizeof(T) * input_help->numel(),
     //                    stream);
-    math::set_constant(dev_ctx, ins_rank, -1);
+    phi::funcs::set_constant(dev_ctx, ins_rank, -1);
 
     expand_rank_attention_input(stream, X->data<T>(), ins_num, x_fea_dim,
                                 input_help_data, ins_num, block_matrix_row,
@@ -129,7 +129,7 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
     int64_t strideA = block_matrix_row;
     int64_t strideB = block_matrix_row * para_col;
 
-    auto blas = math::GetBlas<platform::CUDADeviceContext, T>(dev_ctx);
+    auto blas = phi::funcs::GetBlas<platform::CUDADeviceContext, T>(dev_ctx);
     blas.BatchedGEMM(transA, transB, 1, para_col, block_matrix_row, alpha,
                      input_help_data, param_help_data, beta, out_data, ins_num,
                      strideA, strideB);

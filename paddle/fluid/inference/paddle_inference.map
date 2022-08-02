@@ -1,0 +1,9 @@
+{
+	global:
+		*paddle*;
+		*Pass*;
+		*profile*;
+		*phi*;
+	local:
+		*;
+};

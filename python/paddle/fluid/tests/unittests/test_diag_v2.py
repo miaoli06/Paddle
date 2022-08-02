@@ -21,11 +21,14 @@ import paddle
 import paddle.fluid as fluid
 from paddle.fluid import core
 from paddle.fluid import Program, program_guard
+from paddle.fluid.framework import _test_eager_guard
 
 
 class TestDiagV2Op(OpTest):
+
     def setUp(self):
         self.op_type = "diag_v2"
+        self.python_api = paddle.diag
         self.x = np.random.rand(10, 10)
         self.offset = 0
         self.padding_value = 0.0
@@ -41,40 +44,49 @@ class TestDiagV2Op(OpTest):
 
     def test_check_output(self):
         paddle.enable_static()
-        self.check_output()
+        self.check_output(check_eager=False)
+
+    def test_check_grad(self):
+        paddle.enable_static()
+        self.check_grad(['X'], 'Out', check_eager=False)
 
     def init_config(self):
         pass
 
 
 class TestDiagV2OpCase1(TestDiagV2Op):
+
     def init_config(self):
         self.offset = 1
         self.out = np.diag(self.x, self.offset)
 
 
 class TestDiagV2OpCase2(TestDiagV2Op):
+
     def init_config(self):
         self.offset = -1
         self.out = np.diag(self.x, self.offset)
 
 
 class TestDiagV2OpCase3(TestDiagV2Op):
+
     def init_config(self):
-        self.x = np.random.randint(-10, 10, size=(10, 10))
+        self.x = np.random.randint(-10, 10, size=(10, 10)).astype("float64")
         self.out = np.diag(self.x, self.offset)
 
 
 class TestDiagV2OpCase4(TestDiagV2Op):
+
     def init_config(self):
         self.x = np.random.rand(100)
-        self.padding_value = 8
+        self.padding_value = 2
         n = self.x.size
         self.out = self.padding_value * np.ones((n, n)) + np.diag(
             self.x, self.offset) - np.diag(self.padding_value * np.ones(n))
 
 
 class TestDiagV2Error(unittest.TestCase):
+
     def test_errors(self):
         paddle.enable_static()
         with program_guard(Program(), Program()):
@@ -95,6 +107,7 @@ class TestDiagV2Error(unittest.TestCase):
 
 
 class TestDiagV2API(unittest.TestCase):
+
     def setUp(self):
         self.input_np = np.random.random(size=(10, 10)).astype(np.float32)
         self.expected0 = np.diag(self.input_np)
@@ -184,11 +197,13 @@ class TestDiagV2API(unittest.TestCase):
         x = paddle.static.data(name='input', shape=[10, 10], dtype='float32')
         x2 = paddle.static.data(name='input2', shape=[100], dtype='float64')
         x3 = paddle.static.data(name='input3', shape=[100], dtype='int64')
-        x4 = paddle.static.data(
-            name='input4', shape=[2000, 2000], dtype='float32')
+        x4 = paddle.static.data(name='input4',
+                                shape=[2000, 2000],
+                                dtype='float32')
         x5 = paddle.static.data(name='input5', shape=[2000], dtype='float32')
-        x6 = paddle.static.data(
-            name='input6', shape=[2000, 1500], dtype='float32')
+        x6 = paddle.static.data(name='input6',
+                                shape=[2000, 1500],
+                                dtype='float32')
         result0 = paddle.diag(x)
         result1 = paddle.diag(x, offset=1)
         result2 = paddle.diag(x, offset=-1)
@@ -239,6 +254,9 @@ class TestDiagV2API(unittest.TestCase):
     def test_cpu(self):
         paddle.disable_static(place=paddle.fluid.CPUPlace())
         self.run_imperative()
+        with _test_eager_guard():
+            self.run_imperative()
+
         paddle.enable_static()
 
         with fluid.program_guard(fluid.Program()):
@@ -250,6 +268,8 @@ class TestDiagV2API(unittest.TestCase):
 
         paddle.disable_static(place=paddle.fluid.CUDAPlace(0))
         self.run_imperative()
+        with _test_eager_guard():
+            self.run_imperative()
         paddle.enable_static()
 
         with fluid.program_guard(fluid.Program()):
@@ -257,4 +277,5 @@ class TestDiagV2API(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    paddle.enable_static()
     unittest.main()

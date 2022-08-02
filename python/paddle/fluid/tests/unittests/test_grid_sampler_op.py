@@ -12,21 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import paddle
 import unittest
 import numpy as np
-from op_test import OpTest
+import paddle.fluid.core as core
+from op_test import OpTest, skip_check_grad_ci
+
+paddle.enable_static()
 
 
 def AffineGrid(theta, grid_shape):
     n = grid_shape[0]
     h = grid_shape[1]
     w = grid_shape[2]
-    h_idx = np.repeat(
-        np.linspace(-1, 1, h)[np.newaxis, :], w, axis=0).T[:, :, np.newaxis]
-    w_idx = np.repeat(
-        np.linspace(-1, 1, w)[np.newaxis, :], h, axis=0)[:, :, np.newaxis]
-    grid = np.concatenate(
-        [w_idx, h_idx, np.ones([h, w, 1])], axis=2)  # h * w * 3
+    h_idx = np.repeat(np.linspace(-1, 1, h)[np.newaxis, :], w,
+                      axis=0).T[:, :, np.newaxis]
+    w_idx = np.repeat(np.linspace(-1, 1, w)[np.newaxis, :], h,
+                      axis=0)[:, :, np.newaxis]
+    grid = np.concatenate([w_idx, h_idx, np.ones([h, w, 1])],
+                          axis=2)  # h * w * 3
     grid = np.repeat(grid[np.newaxis, :], n, axis=0)  # n * h * w *3
 
     ret = np.zeros([n, h * w, 2])
@@ -68,8 +72,8 @@ def unnormalizeAndClip(grid_slice, max_val, align_corners, padding_mode):
     if align_corners:
         grid_slice = 0.5 * ((grid_slice.astype('float64') + 1.0) * max_val)
     else:
-        grid_slice = 0.5 * (
-            (grid_slice.astype('float64') + 1.0) * (max_val + 1)) - 0.5
+        grid_slice = 0.5 * ((grid_slice.astype('float64') + 1.0) *
+                            (max_val + 1)) - 0.5
 
     if padding_mode == "border":
         grid_slice = clip(grid_slice, 0, max_val)
@@ -79,8 +83,8 @@ def unnormalizeAndClip(grid_slice, max_val, align_corners, padding_mode):
                                                                    0.5)
         extra = grid_abs - np.floor(grid_abs / double_range) * double_range
         grid_slice = np.minimum(extra, double_range - extra)
-        grid_slice = grid_slice if align_corners else clip(grid_slice - 0.5, 0,
-                                                           max_val)
+        grid_slice = grid_slice if align_corners else clip(
+            grid_slice - 0.5, 0, max_val)
     return grid_slice
 
 
@@ -135,10 +139,12 @@ def GridSampler(data,
 
 
 class TestGridSamplerOp(OpTest):
+
     def setUp(self):
         self.use_cudnn = False
         self.numeric_grad_delta = 0.0001
         self.op_type = 'grid_sampler'
+        self.python_api = paddle.nn.functional.grid_sample
         self.align_corners = True
         self.padding_mode = "zeros"
         self.mode = "bilinear"
@@ -159,21 +165,21 @@ class TestGridSamplerOp(OpTest):
             "padding_mode": self.padding_mode,
             "mode": self.mode
         }
-        #    print("X: {}".format(x))
         self.outputs = {
-            'Output': GridSampler(x, grid, self.align_corners, self.mode,
-                                  self.padding_mode)
+            'Output':
+            GridSampler(x, grid, self.align_corners, self.mode,
+                        self.padding_mode)
         }
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_eager=True)
 
     def test_check_grad_normal(self):
-        self.check_grad(
-            ['X', 'Grid'],
-            'Output',
-            max_relative_error=0.01,
-            numeric_grad_delta=self.numeric_grad_delta)
+        self.check_grad(['X', 'Grid'],
+                        'Output',
+                        max_relative_error=0.01,
+                        numeric_grad_delta=self.numeric_grad_delta,
+                        check_eager=True)
 
     def initTestCase(self):
         self.x_shape = (2, 3, 8, 8)
@@ -182,10 +188,11 @@ class TestGridSamplerOp(OpTest):
         self.align_corners = True
         self.padding_mode = "zeros"
         self.mode = "bilinear"
-        self.use_cudnn = True
+        self.use_cudnn = False if core.is_compiled_with_rocm() else True
 
 
 class Case1(TestGridSamplerOp):
+
     def initTestCase(self):
         self.x_shape = (2, 3, 5, 6)
         self.grid_shape = (2, 8, 9, 2)
@@ -195,7 +202,8 @@ class Case1(TestGridSamplerOp):
         self.mode = "bilinear"
 
 
-class Case1(TestGridSamplerOp):
+class Case1_(TestGridSamplerOp):
+
     def initTestCase(self):
         self.x_shape = (2, 3, 5, 6)
         self.grid_shape = (2, 8, 9, 2)
@@ -206,6 +214,7 @@ class Case1(TestGridSamplerOp):
 
 
 class Case2(TestGridSamplerOp):
+
     def initTestCase(self):
         self.x_shape = (2, 3, 5, 6)
         self.grid_shape = (2, 8, 9, 2)
@@ -216,6 +225,7 @@ class Case2(TestGridSamplerOp):
 
 
 class Case3(TestGridSamplerOp):
+
     def initTestCase(self):
         self.x_shape = (2, 3, 5, 6)
         self.grid_shape = (2, 8, 9, 2)
@@ -226,6 +236,7 @@ class Case3(TestGridSamplerOp):
 
 
 class Case4(TestGridSamplerOp):
+
     def initTestCase(self):
         self.x_shape = (2, 3, 5, 6)
         self.grid_shape = (2, 8, 9, 2)
@@ -234,6 +245,44 @@ class Case4(TestGridSamplerOp):
         self.padding_mode = "reflection"
         self.mode = "nearest"
         self.numeric_grad_delta = 0.0001
+
+
+@skip_check_grad_ci(reason="'check_grad' on large inputs is too slow, " +
+                    "however it is desirable to cover the forward pass")
+class LargeInputCase(TestGridSamplerOp):
+
+    def get_places(self):
+        places = []
+        if core.is_compiled_with_cuda():
+            places.append(core.CUDAPlace(0))
+        return places
+
+    def initTestCase(self):
+        self.no_need_check_grad = True
+        self.x_shape = (2, 3, 128, 128)
+        self.grid_shape = (2, 130, 130, 2)
+        self.theta_shape = (2, 2, 3)
+        self.align_corners = False
+        self.padding_mode = "reflection"
+        self.mode = "bilinear"
+
+    def test_check_grad_normal(self):
+        pass
+
+
+@skip_check_grad_ci(reason="'check_grad' on large inputs is too slow, " +
+                    "however it is desirable to cover the forward pass")
+class Case5(LargeInputCase):
+
+    def initTestCase(self):
+        self.no_need_check_grad = True
+        self.x_shape = (2, 3, 128, 128)
+        self.grid_shape = (2, 130, 130, 2)
+        self.theta_shape = (2, 2, 3)
+        self.align_corners = True
+        self.padding_mode = "zeros"
+        self.mode = "bilinear"
+        self.use_cudnn = False if core.is_compiled_with_rocm() else True
 
 
 if __name__ == "__main__":

@@ -13,11 +13,9 @@
 // limitations under the License.
 #include "paddle/fluid/platform/cpu_info.h"
 
-#include <ostream>
 #include <sstream>
 
 #include "gflags/gflags.h"
-#include "glog/logging.h"
 #include "gtest/gtest.h"
 #include "paddle/fluid/string/printf.h"
 
@@ -29,6 +27,7 @@ TEST(CpuMemoryUsage, Print) {
   float use_percent = FLAGS_fraction_of_cpu_memory_to_use * 100;
 
   std::cout << paddle::string::Sprintf("\n%.2f %% of CPU Memory Usage: %d GB\n",
-                                       use_percent, memory_size)
+                                       use_percent,
+                                       memory_size)
             << std::endl;
 }

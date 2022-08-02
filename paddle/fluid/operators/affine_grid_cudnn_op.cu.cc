@@ -12,8 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#ifndef PADDLE_WITH_HIP
+// HIP not support cudnnSpatialTfGridGeneratorForward
+
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/platform/cudnn_helper.h"
+#include "paddle/fluid/platform/device/gpu/gpu_dnn.h"
 
 namespace paddle {
 namespace operators {
@@ -27,11 +30,12 @@ class CUDNNAffineGridOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     PADDLE_ENFORCE_EQ(
-        platform::is_gpu_place(ctx.GetPlace()), true,
+        platform::is_gpu_place(ctx.GetPlace()),
+        true,
         platform::errors::InvalidArgument(
             "Only support for CUDAPlace.Please switch your context from "
             "CPUPlace to CUDAPlace or update your cudnn."));
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto& dev_ctx = ctx.template device_context<phi::GPUContext>();
     auto handle = dev_ctx.cudnn_handle();
     auto* theta = ctx.Input<Tensor>("Theta");
     auto* output = ctx.Output<Tensor>("Output");
@@ -62,8 +66,9 @@ class CUDNNAffineGridOpKernel : public framework::OpKernel<T> {
     PADDLE_ENFORCE_EQ(
         platform::dynload::cudnnSpatialTfGridGeneratorForward(
             handle, cudnn_st_desc, theta_data, output_data),
-        0, platform::errors::Fatal("Some errors has occurred "
-                                   "during forward computation in cudnn."));
+        0,
+        platform::errors::Fatal("Some errors has occurred "
+                                "during forward computation in cudnn."));
   }
 };
 
@@ -71,13 +76,14 @@ template <typename T>
 class CUDNNAffineGridGradOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-    PADDLE_ENFORCE_EQ(platform::is_gpu_place(ctx.GetPlace()), true,
+    PADDLE_ENFORCE_EQ(platform::is_gpu_place(ctx.GetPlace()),
+                      true,
                       platform::errors::InvalidArgument(
                           "Only "
                           "support for CUDAPlace. Please switch "
                           "your context from CPUPlace to "
                           "CUDAPlace or update your cudnn."));
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto& dev_ctx = ctx.template device_context<phi::GPUContext>();
     auto handle = dev_ctx.cudnn_handle();
     auto output_grad = ctx.Input<Tensor>(framework::GradVarName("Output"));
     auto theta_grad = ctx.Output<Tensor>(framework::GradVarName("Theta"));
@@ -105,7 +111,7 @@ class CUDNNAffineGridGradOpKernel : public framework::OpKernel<T> {
     const T* output_grad_data = output_grad->data<T>();
     T* theta_grad_data = theta_grad->mutable_data<T>(ctx.GetPlace());
 
-    PADDLE_ENFORCE_CUDA_SUCCESS(
+    PADDLE_ENFORCE_GPU_SUCCESS(
         platform::dynload::cudnnSpatialTfGridGeneratorBackward(
             handle, cudnn_st_desc, output_grad_data, theta_grad_data));
   }
@@ -115,9 +121,15 @@ class CUDNNAffineGridGradOpKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace plat = paddle::platform;
-REGISTER_OP_KERNEL(affine_grid, CUDNN, plat::CUDAPlace,
+REGISTER_OP_KERNEL(affine_grid,
+                   CUDNN,
+                   plat::CUDAPlace,
                    paddle::operators::CUDNNAffineGridOpKernel<float>,
                    paddle::operators::CUDNNAffineGridOpKernel<double>);
-REGISTER_OP_KERNEL(affine_grid_grad, CUDNN, plat::CUDAPlace,
+REGISTER_OP_KERNEL(affine_grid_grad,
+                   CUDNN,
+                   plat::CUDAPlace,
                    paddle::operators::CUDNNAffineGridGradOpKernel<float>,
                    paddle::operators::CUDNNAffineGridGradOpKernel<double>);
+
+#endif  // not PADDLE_WITH_HIP

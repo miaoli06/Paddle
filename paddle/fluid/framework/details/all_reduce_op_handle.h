@@ -31,25 +31,37 @@ namespace platform {
 class NCCLCommunicator;
 }  // namespace platform
 }  // namespace paddle
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/framework/details/nccl_op_handle.h"
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#elif defined(PADDLE_WITH_XPU_BKCL)
+#include "paddle/fluid/framework/details/bkcl_op_handle.h"
+#include "paddle/fluid/platform/device/xpu/bkcl_helper.h"
 #endif
 
 namespace paddle {
 namespace framework {
 namespace details {
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 class AllReduceOpHandle : public NCCLOpHandleBase {
  public:
-  AllReduceOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
+  AllReduceOpHandle(ir::Node *node,
+                    const std::vector<Scope *> &local_scopes,
                     const std::vector<platform::Place> &places,
                     const platform::NCCLCommunicator *ctxs);
+#elif defined(PADDLE_WITH_XPU_BKCL)
+class AllReduceOpHandle : public BKCLOpHandleBase {
+ public:
+  AllReduceOpHandle(ir::Node *node,
+                    const std::vector<Scope *> &local_scopes,
+                    const std::vector<platform::Place> &places,
+                    const platform::BKCLCommunicator *ctxs);
 #else
 class AllReduceOpHandle : public OpHandleBase {
  public:
-  AllReduceOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
+  AllReduceOpHandle(ir::Node *node,
+                    const std::vector<Scope *> &local_scopes,
                     const std::vector<platform::Place> &places);
 #endif
   std::string Name() const override;
@@ -65,17 +77,23 @@ class AllReduceOpHandle : public OpHandleBase {
 
   std::vector<Scope *> local_scopes_;
 
-#ifndef PADDLE_WITH_NCCL
-  // NCCLOpHandleBase already have these attributes.
+#if !defined(PADDLE_WITH_NCCL) && !defined(PADDLE_WITH_RCCL) && \
+    !defined(PADDLE_WITH_XPU_BKCL)
+  // NCCLOpHandleBase and BKCLOpHandleBase already have these attributes.
   // Will polish it by class inheritance framework.
   std::vector<platform::Place> places_;
 #endif
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   void NCCLAllReduceFunc(
       const std::vector<std::function<void()>> &all_reduce_calls);
 
   void SyncNCCLAllReduce();
+#endif
+
+#if defined(PADDLE_WITH_XPU_BKCL)
+  void BKCLAllReduceFunc(
+      const std::vector<std::function<void()>> &all_reduce_calls);
 #endif
 
   void AllReduceImpl(const std::vector<VarHandle *> &in_var_handles,
@@ -83,7 +101,8 @@ class AllReduceOpHandle : public OpHandleBase {
 
   void AllReduceFunc(std::vector<const void *> lod_tensor_data,
                      const framework::proto::VarType::Type &dtype,
-                     int64_t numel, const std::vector<platform::Place> &places,
+                     int64_t numel,
+                     const std::vector<platform::Place> &places,
                      const std::vector<std::string> &out_var_handles);
 };
 

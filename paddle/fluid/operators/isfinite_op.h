@@ -22,11 +22,9 @@
 #include "paddle/fluid/platform/float16.h"
 #include "paddle/fluid/platform/transform.h"
 
-namespace paddle {
-namespace framework {
-class Tensor;
-}  // namespace framework
-}  // namespace paddle
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace operators {
@@ -60,12 +58,13 @@ class OverflowKernel : public framework::OpKernel<T> {
     if (x->IsType<framework::LoDTensor>()) {
       auto* in = ctx.Input<framework::Tensor>("X");
       functor(*in, out);
-    } else if (x->IsType<framework::SelectedRows>()) {
-      auto& in = ctx.Input<framework::SelectedRows>("X")->value();
+    } else if (x->IsType<phi::SelectedRows>()) {
+      auto& in = ctx.Input<phi::SelectedRows>("X")->value();
       functor(in, out);
     } else {
       PADDLE_ENFORCE_EQ(
-          true, false,
+          true,
+          false,
           platform::errors::InvalidArgument(
               "The input type mismatch, the type of Input(X) must be Tensor or "
               "SelectedRows, please check your input."));
@@ -75,8 +74,3 @@ class OverflowKernel : public framework::OpKernel<T> {
 
 }  // namespace operators
 }  // namespace paddle
-
-#define FOR_EACH_KERNEL_FUNCTOR(__macro) \
-  __macro(isinf, InfinityFunctor);       \
-  __macro(isnan, NANFunctor);            \
-  __macro(isfinite, IsfiniteFunctor);

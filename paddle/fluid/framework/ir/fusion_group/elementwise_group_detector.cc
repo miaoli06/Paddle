@@ -13,9 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/ir/fusion_group/elementwise_group_detector.h"
+
 #include <string>
-#include <unordered_set>
-#include <vector>
+
 #include "paddle/fluid/framework/ir/fusion_group/operation.h"
 #include "paddle/fluid/framework/ir/subgraph_detector.h"
 
@@ -45,7 +45,8 @@ static bool IsSpecifiedOp(const std::unordered_set<std::string>& op_types,
 }
 
 static bool IsGradOp(const Node* n) {
-  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(), true,
+  PADDLE_ENFORCE_EQ(n && n->IsOp() && n->Op(),
+                    true,
                     platform::errors::InvalidArgument(
                         "Expected node %p to be an operator node.", n));
   std::string suffix = "_grad";

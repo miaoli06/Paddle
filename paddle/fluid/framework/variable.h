@@ -18,7 +18,7 @@
 #include <typeindex>
 #include <typeinfo>
 
-#include "paddle/fluid/framework/selected_rows.h"
+#include "paddle/fluid/framework/selected_rows_utils.h"
 #include "paddle/fluid/framework/var_type_traits.h"
 namespace paddle {
 namespace framework {
@@ -33,10 +33,12 @@ class Variable {
     PADDLE_ENFORCE_NOT_NULL(
         holder_, platform::errors::NotFound("Variable is not initialized."));
     PADDLE_ENFORCE_EQ(
-        holder_->Type(), VarTypeTrait<T>::kId,
+        holder_->Type(),
+        VarTypeTrait<T>::kId,
         platform::errors::InvalidArgument(
             "The Variable type must be %s, but the type it holds is %s.",
-            ToTypeName(VarTypeTrait<T>::kId), ToTypeName(holder_->Type())));
+            ToTypeName(VarTypeTrait<T>::kId),
+            ToTypeName(holder_->Type())));
     return *static_cast<const T*>(holder_->Ptr());
   }
 
@@ -48,10 +50,12 @@ class Variable {
       holder_.reset(new PlaceholderImpl<T>());
     } else {
       PADDLE_ENFORCE_EQ(
-          holder_->Type(), VarTypeTrait<T>::kId,
+          holder_->Type(),
+          VarTypeTrait<T>::kId,
           platform::errors::InvalidArgument(
               "The Variable type must be %s, but the type it holds is %s.",
-              ToTypeName(VarTypeTrait<T>::kId), ToTypeName(holder_->Type())));
+              ToTypeName(VarTypeTrait<T>::kId),
+              ToTypeName(holder_->Type())));
     }
     return static_cast<T*>(holder_->Ptr());
   }
@@ -69,22 +73,13 @@ class Variable {
     return holder_->Type();
   }
 
-  /**
-   * The internal of two Variables share the same Placeholder whose type can be
-   * Tensor, LoDTensor, SelectedRows, LoDTensorArray, etc.
-   *
-   * NOTE(liym27): In dynamic mode, sharing the same Placeholder also means
-   * share the same TensorInplaceVersion, which is very important for inplace
-   * operations.
-   */
-  void SharePlaceholderWith(const Variable& var);
-
  private:
   // This method hides type T, so it doesn't appear as a template parameter of
   // Variable.
-  framework::TensorInplaceVersion* InplaceVersionCounter();
+  phi::DenseTensor::InplaceVersion* InplaceVersionCounter();
 
  public:
+  void SetInplaceVersionToZero();
   uint32_t CurrentInplaceVersion();
   void BumpInplaceVersion();
 
@@ -123,16 +118,8 @@ class Variable {
   std::shared_ptr<Placeholder> holder_;
 };
 
-inline void Variable::SharePlaceholderWith(const Variable& var) {
-  PADDLE_ENFORCE_EQ(var.IsInitialized(), true,
-                    platform::errors::PreconditionNotMet(
-                        "Variable holds no memory. "
-                        "Call Variable::GetMutable() firstly."));
-  holder_ = var.holder_;
-}
-
-inline framework::TensorInplaceVersion* Variable::InplaceVersionCounter() {
-  framework::TensorInplaceVersion* version_counter_ptr(nullptr);
+inline phi::DenseTensor::InplaceVersion* Variable::InplaceVersionCounter() {
+  phi::DenseTensor::InplaceVersion* version_counter_ptr(nullptr);
   if (IsType<framework::LoDTensor>()) {
     version_counter_ptr =
         &GetMutable<framework::LoDTensor>()->InplaceVersionCounter();
@@ -140,8 +127,8 @@ inline framework::TensorInplaceVersion* Variable::InplaceVersionCounter() {
     version_counter_ptr =
         &GetMutable<framework::Tensor>()->InplaceVersionCounter();
 
-  } else if (IsType<framework::SelectedRows>()) {
-    version_counter_ptr = &GetMutable<framework::SelectedRows>()
+  } else if (IsType<phi::SelectedRows>()) {
+    version_counter_ptr = &GetMutable<phi::SelectedRows>()
                                ->mutable_value()
                                ->InplaceVersionCounter();
   } else {
@@ -150,6 +137,12 @@ inline framework::TensorInplaceVersion* Variable::InplaceVersionCounter() {
             << platform::demangle(framework::ToTypeName(Type()));
   }
   return version_counter_ptr;
+}
+
+inline void Variable::SetInplaceVersionToZero() {
+  auto inplace_version_counter = this->InplaceVersionCounter();
+  if (inplace_version_counter)
+    inplace_version_counter->SetInplaceVersionToZero();
 }
 
 inline uint32_t Variable::CurrentInplaceVersion() {

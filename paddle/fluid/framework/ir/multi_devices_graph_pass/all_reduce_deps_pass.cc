@@ -12,14 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <algorithm>
-#include <map>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
-
 #include "paddle/fluid/framework/details/all_reduce_op_handle.h"
 #include "paddle/fluid/framework/details/container_cast.h"
 #include "paddle/fluid/framework/details/fused_all_reduce_op_handle.h"
@@ -27,7 +19,6 @@
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/ir/graph_helper.h"
 #include "paddle/fluid/framework/ir/pass.h"
-#include "paddle/fluid/framework/op_proto_maker.h"
 
 namespace paddle {
 namespace framework {
@@ -39,7 +30,7 @@ class AllReduceDepsPass : public ir::Pass {
     std::vector<details::OpHandleBase*> all_reduce_op_handles =
         GetSortedAllReduceOps(*graph);
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     auto use_hierarchical_allreduce =
         Get<bool>(details::kUseHierarchicalAllReduce);
     for (size_t i = 0; i < all_reduce_op_handles.size(); ++i) {
@@ -98,7 +89,8 @@ class AllReduceDepsPass : public ir::Pass {
       }
 
       PADDLE_ENFORCE_NE(
-          next_ready_ops.size(), 0,
+          next_ready_ops.size(),
+          0,
           platform::errors::InvalidArgument("There may be a cycle."));
       ready_ops.clear();
       std::swap(ready_ops, next_ready_ops);
@@ -135,11 +127,13 @@ class AllReduceDepsPass : public ir::Pass {
               details::DynamicCast<details::VarHandle>(left->Inputs());
           auto right_in_vars =
               details::DynamicCast<details::VarHandle>(right->Inputs());
-          PADDLE_ENFORCE_GT(left_in_vars.size(), 0,
+          PADDLE_ENFORCE_GT(left_in_vars.size(),
+                            0,
                             platform::errors::InvalidArgument(
                                 "OpHandle(%s) inputs size must greater than 0.",
                                 left->Name()));
-          PADDLE_ENFORCE_GT(right_in_vars.size(), 0,
+          PADDLE_ENFORCE_GT(right_in_vars.size(),
+                            0,
                             platform::errors::InvalidArgument(
                                 "OpHandle(%s) inputs size must greater than 0.",
                                 right->Name()));
@@ -182,7 +176,8 @@ class AllReduceDepsPass : public ir::Pass {
         }
       }
       PADDLE_ENFORCE_EQ(
-          find_valid_input, true,
+          find_valid_input,
+          true,
           platform::errors::NotFound(
               "In OpHandle(%s) Doesn't find valid input.", op->Name()));
     }

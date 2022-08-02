@@ -20,6 +20,7 @@
 #endif
 
 #include <glog/logging.h>
+
 #include <algorithm>
 #include <condition_variable>  // NOLINT
 #include <deque>
@@ -28,6 +29,7 @@
 #include <mutex>  // NOLINT
 #include <utility>
 #include <vector>
+
 #include "paddle/fluid/framework/expect.h"
 
 namespace paddle {
@@ -157,7 +159,7 @@ class ChannelObject {
     p.resize(finished);
     return finished;
   }
-  // 这个接口就是只读取一次数据，最多长度为size
+  // read once only
   size_t ReadOnce(std::vector<T>& p, size_t size) {  // NOLINT
     if (size == 0) {
       return 0;
@@ -170,7 +172,6 @@ class ChannelObject {
 
     return finished;
   }
-
   size_t ReadAll(std::vector<T>& p) {  // NOLINT
     p.clear();
     size_t finished = 0;
@@ -254,13 +255,15 @@ class ChannelObject {
     return !closed_;
   }
 
-  size_t Read(size_t n, T* p, std::unique_lock<std::mutex>& lock,  // NOLINT
-              bool once = false) {                                 // NOLINT
+  size_t Read(size_t n,
+              T* p,
+              std::unique_lock<std::mutex>& lock,  // NOLINT
+              bool once = false) {                 // NOLINT
     size_t finished = 0;
     CHECK(n <= MaxCapacity() - reading_count_);
     reading_count_ += n;
     while (finished < n && WaitForRead(lock)) {
-      size_t m = std::min(n - finished, data_.size());
+      size_t m = (std::min)(n - finished, data_.size());
       for (size_t i = 0; i < m; i++) {
         p[finished++] = std::move(data_.front());
         data_.pop_front();

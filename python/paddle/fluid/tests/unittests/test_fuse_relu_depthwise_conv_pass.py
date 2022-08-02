@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from parallel_executor_test_base import TestParallelExecutorBase
+from parallel_executor_test_base import TestParallelExecutorBase, DeviceType
 import paddle.fluid as fluid
 import paddle.fluid.core as core
 import numpy as np
@@ -28,21 +28,25 @@ def norm(*args, **kargs):
 
 def sep_conv(input, channel, stride, filter, dilation=1, act=None):
     # with scope('depthwise'):
-    input = fluid.layers.conv2d(
-        input,
-        input.shape[1],
-        filter,
-        stride,
-        groups=input.shape[1],
-        padding=(filter // 2) * dilation,
-        dilation=dilation,
-        use_cudnn=False,
-        bias_attr=False)
+    input = fluid.layers.conv2d(input,
+                                input.shape[1],
+                                filter,
+                                stride,
+                                groups=input.shape[1],
+                                padding=(filter // 2) * dilation,
+                                dilation=dilation,
+                                use_cudnn=False,
+                                bias_attr=False)
     input = norm(input)
     if act: input = act(input)
     # with scope('pointwise'):
-    input = fluid.layers.conv2d(
-        input, channel, 1, 1, groups=1, padding=0, bias_attr=False)
+    input = fluid.layers.conv2d(input,
+                                channel,
+                                1,
+                                1,
+                                groups=1,
+                                padding=0,
+                                bias_attr=False)
     input = norm(input)
     if act: input = act(input)
     return input
@@ -58,11 +62,12 @@ def simple_depthwise_net(use_feed):
         hidden = fluid.layers.relu(hidden)
     prediction = fluid.layers.fc(hidden, size=10, act='softmax')
     loss = fluid.layers.cross_entropy(input=prediction, label=label)
-    loss = fluid.layers.mean(loss)
+    loss = paddle.mean(loss)
     return loss
 
 
 class TestMNIST(TestParallelExecutorBase):
+
     def _init_data(self, random=True):
         np.random.seed(5)
         if random:
@@ -72,8 +77,8 @@ class TestMNIST(TestParallelExecutorBase):
         label = np.ones(shape=[32, 1], dtype='int64')
         return img, label
 
-    def _compare(self, model, use_cuda, random_data=True, only_forward=False):
-        if use_cuda and not core.is_compiled_with_cuda():
+    def _compare(self, model, use_device, random_data=True, only_forward=False):
+        if use_device == DeviceType.CUDA and not core.is_compiled_with_cuda():
             return
         img, label = self._init_data(random_data)
 
@@ -86,19 +91,23 @@ class TestMNIST(TestParallelExecutorBase):
         if only_forward:
             _optimizer = None
 
-        fuse_op_first_loss, fuse_op_last_loss = self.check_network_convergence(
+        fuse_op_first_loss, fuse_op_last_loss, _ = self.check_network_convergence(
             model,
-            feed_dict={"image": img,
-                       "label": label},
-            use_cuda=use_cuda,
+            feed_dict={
+                "image": img,
+                "label": label
+            },
+            use_device=use_device,
             fuse_relu_depthwise_conv=True,
             use_ir_memory_optimize=True,
             optimizer=_optimizer)
-        not_fuse_op_first_loss, not_fuse_op_last_loss = self.check_network_convergence(
+        not_fuse_op_first_loss, not_fuse_op_last_loss, _ = self.check_network_convergence(
             model,
-            feed_dict={"image": img,
-                       "label": label},
-            use_cuda=use_cuda,
+            feed_dict={
+                "image": img,
+                "label": label
+            },
+            use_device=use_device,
             fuse_relu_depthwise_conv=False,
             optimizer=_optimizer)
 
@@ -108,13 +117,14 @@ class TestMNIST(TestParallelExecutorBase):
             self.assertAlmostEquals(loss[0], loss[1], delta=1e-6)
 
     def test_simple_depthwise_with_fuse_op(self):
-        self._compare(simple_depthwise_net, True)
-        self._compare(simple_depthwise_net, False)
+        self._compare(simple_depthwise_net, DeviceType.CUDA)
+        self._compare(simple_depthwise_net, DeviceType.CPU)
 
     def test_simple_depthwise_with_fuse_op_only_forward(self):
-        self._compare(simple_depthwise_net, True, only_forward=True)
-        self._compare(simple_depthwise_net, False, only_forward=True)
+        self._compare(simple_depthwise_net, DeviceType.CUDA, only_forward=True)
+        self._compare(simple_depthwise_net, DeviceType.CPU, only_forward=True)
 
 
 if __name__ == '__main__':
+    paddle.enable_static()
     unittest.main()

@@ -12,16 +12,17 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/operators/lookup_table_v2_op.h"
 #include <memory>
+
 #include "paddle/fluid/framework/no_need_buffer_vars_inference.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/framework/var_type_inference.h"
-
+#include "paddle/fluid/operators/lookup_table_v2_op.h"
+#include "paddle/fluid/platform/device/device_wrapper.h"
+#ifdef PADDLE_WITH_XPU
 namespace paddle {
 namespace operators {
 
-#ifdef PADDLE_WITH_XPU
 template <typename DeviceContext, typename T>
 class LookupTableV2XPUKernel : public framework::OpKernel<T> {
  public:
@@ -30,12 +31,14 @@ class LookupTableV2XPUKernel : public framework::OpKernel<T> {
     auto *output_t = context.Output<LoDTensor>("Out");  // float
     auto *table_var = context.InputVar("W");
     PADDLE_ENFORCE_EQ(
-        (std::is_same<DeviceContext, platform::XPUDeviceContext>::value), true,
+        (std::is_same<DeviceContext, platform::XPUDeviceContext>::value),
+        true,
         platform::errors::PreconditionNotMet("Unsupported place! only support "
                                              "xpu place , please check your "
                                              "place."));
 
-    PADDLE_ENFORCE_EQ(table_var->IsType<LoDTensor>(), true,
+    PADDLE_ENFORCE_EQ(table_var->IsType<LoDTensor>(),
+                      true,
                       platform::errors::PermissionDenied(
                           "Unsupported Variable Type , idx in "
                           "LookupTableV2XPUKernel should be LoDTensor."));
@@ -45,26 +48,34 @@ class LookupTableV2XPUKernel : public framework::OpKernel<T> {
 
     auto *table_t = context.Input<LoDTensor>("W");
     auto &dev_ctx = context.template device_context<DeviceContext>();
-    // size_t N = table_t->dims()[0];
-    size_t D = table_t->dims()[1];
 
     auto *table = table_t->data<T>();
     auto *output = output_t->mutable_data<T>(context.GetPlace());
+
     const int64_t *ids = ids_t->data<int64_t>();
 
     PADDLE_ENFORCE_EQ(
-        ids_numel <= std::numeric_limits<int32_t>::max(), true,
+        ids_numel <= std::numeric_limits<int32_t>::max(),
+        true,
         platform::errors::OutOfRange(
             "Number of ids greater than int32_t::max , please check "
             "number of ids in LookupTableV2XPUKernel."));
-    int ids_numel_int32 = static_cast<int>(ids_numel);
-    int r = xpu::embedding<T>(dev_ctx.x_context(), ids_numel_int32, ids, D,
-                              table, output, padding_idx);
-    PADDLE_ENFORCE_EQ(r == xpu::Error_t::SUCCESS, true,
-                      platform::errors::External(
-                          "XPU API return wrong value[%d] , please check where "
-                          "Baidu Kunlun Card is properly installed.",
-                          r));
+
+    int ym = static_cast<int>(ids_numel);
+
+    size_t xm = table_t->dims()[0];
+    size_t n = table_t->dims()[1];
+
+    int r = xpu::embedding<T, int64_t>(dev_ctx.x_context(),
+                                       table,
+                                       ids,
+                                       output,
+                                       xm,
+                                       n,
+                                       ym,
+                                       static_cast<int>(padding_idx));
+
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "embedding");
   }
 };
 
@@ -74,7 +85,8 @@ class LookupTableV2GradXPUKernel : public framework::OpKernel<T> {
   void Compute(const framework::ExecutionContext &context) const override {
     auto *table_var = context.InputVar("W");
     DDim table_dim;
-    PADDLE_ENFORCE_EQ(table_var->IsType<LoDTensor>(), true,
+    PADDLE_ENFORCE_EQ(table_var->IsType<LoDTensor>(),
+                      true,
                       platform::errors::PermissionDenied(
                           "Unsupported Variable Type , idx in "
                           "LookupTableV2GradXPUKernel should be LoDTensor."));
@@ -82,7 +94,8 @@ class LookupTableV2GradXPUKernel : public framework::OpKernel<T> {
 
     bool is_sparse = context.Attr<bool>("is_sparse");
     PADDLE_ENFORCE_EQ(
-        is_sparse, false,
+        is_sparse,
+        false,
         platform::errors::InvalidArgument(
             "LookupTableV2GradXPUKernel dose NOT support is_sparse = True."));
 
@@ -92,44 +105,36 @@ class LookupTableV2GradXPUKernel : public framework::OpKernel<T> {
 
     int64_t ids_numel = ids_t->numel();
     PADDLE_ENFORCE_EQ(
-        ids_numel <= std::numeric_limits<int32_t>::max(), true,
+        ids_numel <= std::numeric_limits<int32_t>::max(),
+        true,
         platform::errors::OutOfRange(
             "Number of ids greater than int32_t::max , please check "
             "number of ids in LookupTableV2GradXPUKernel."));
-    int ids_numel_int32 = static_cast<int>(ids_numel);
-    const int64_t *ids_data = ids_t->data<int64_t>();
 
-    int D = d_table_t->dims()[1];
+    auto &dev_ctx = context.template device_context<DeviceContext>();
+    const int64_t *ids_data = ids_t->data<int64_t>();
     const T *d_output_data = d_output_t->data<T>();
     T *d_table_data = d_table_t->mutable_data<T>(context.GetPlace());
-    auto &dev_ctx = context.template device_context<DeviceContext>();
-    // set zeros for d_table_data
-    const int zero = 0;
-    int r = xpu::memset(dev_ctx.x_context(), d_table_data, zero,
-                        d_table_t->numel() * sizeof(T));
-    PADDLE_ENFORCE_EQ(r == xpu::Error_t::SUCCESS, true,
-                      platform::errors::External(
-                          "XPU API return wrong value[%d], please check where "
-                          "Baidu Kunlun Card is properly installed.",
-                          r));
+    int xm = d_table_t->dims()[0];
+    int ym = static_cast<int>(ids_numel);
+    int n = d_table_t->dims()[1];
+    int padding_idx = context.Attr<int64_t>("padding_idx");
 
-    r = xpu::embedding_backward<T, int64_t>(dev_ctx.x_context(),
-                                            ids_numel_int32, ids_data, D,
-                                            d_output_data, d_table_data);
-    PADDLE_ENFORCE_EQ(r == xpu::Error_t::SUCCESS, true,
-                      platform::errors::External(
-                          "XPU API return wrong value[%d] , please check where "
-                          "Baidu Kunlun Card is properly installed.",
-                          r));
+    int r = xpu::embedding_grad<T, int64_t>(dev_ctx.x_context(),
+                                            d_output_data,
+                                            ids_data,
+                                            d_table_data,
+                                            xm,
+                                            n,
+                                            ym,
+                                            padding_idx);
+    PADDLE_ENFORCE_XDNN_SUCCESS(r, "embedding_grad");
   }
 };
-#endif
-
 }  // namespace operators
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-#ifdef PADDLE_WITH_XPU
 REGISTER_OP_XPU_KERNEL(
     lookup_table_v2,
     ops::LookupTableV2XPUKernel<paddle::platform::XPUDeviceContext, float>);

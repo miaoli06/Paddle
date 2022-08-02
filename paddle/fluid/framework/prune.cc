@@ -16,20 +16,9 @@ limitations under the License. */
 
 #include <glog/logging.h>
 
-#include <algorithm>
-#include <memory>
 #include <queue>
-#include <set>
-#include <string>
-#include <tuple>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
-#include "paddle/fluid/framework/block_desc.h"
-#include "paddle/fluid/framework/op_desc.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
-#include "paddle/fluid/framework/program_desc.h"
 
 namespace paddle {
 namespace framework {
@@ -86,7 +75,8 @@ int GetSubBlockIndex(const proto::OpDesc& op_desc) {
   // The block index >= 0, so -1 is used to indicate "NotFound".
   for (auto& attr : op_desc.attrs()) {
     if (attr.type() == proto::AttrType::BLOCK) {
-      PADDLE_ENFORCE_EQ(attr.has_block_idx(), true,
+      PADDLE_ENFORCE_EQ(attr.has_block_idx(),
+                        true,
                         platform::errors::NotFound(
                             "Attribute sub_block is not found in operator %s",
                             op_desc.type()));
@@ -99,7 +89,8 @@ int GetSubBlockIndex(const proto::OpDesc& op_desc) {
 void SetSubBlockIndex(proto::OpDesc* op_desc, int sub_idx) {
   for (auto& attr : *op_desc->mutable_attrs()) {
     if (attr.type() == proto::AttrType::BLOCK) {
-      PADDLE_ENFORCE_EQ(attr.has_block_idx(), true,
+      PADDLE_ENFORCE_EQ(attr.has_block_idx(),
+                        true,
                         platform::errors::NotFound(
                             "Attribute sub_block is not found in operator %s",
                             op_desc->type()));
@@ -116,7 +107,8 @@ int GetOpRole(const proto::OpDesc& op_desc) {
   for (auto& attr : op_desc.attrs()) {
     if (attr.name() == OpProtoAndCheckerMaker::OpRoleAttrName()) {
       PADDLE_ENFORCE_EQ(
-          attr.has_i(), true,
+          attr.has_i(),
+          true,
           platform::errors::NotFound("Attribute %s is empty in operator %s",
                                      OpProtoAndCheckerMaker::OpRoleAttrName(),
                                      op_desc.type()));
@@ -157,13 +149,32 @@ int FindMapByValue(const std::map<int, int>& m, int val) {
   return -1;
 }
 
+// In other two cases，the op that has feed vars as output vars is dependent:
+// 1. op has subblock, like while/for/ifelse/recurrent
+// 2. op is in subblock
+bool IsSubBlockDependent(const proto::OpDesc& op_desc,
+                         const std::set<std::string>& feed_vars,
+                         int parent_block_id) {
+  for (auto& var : op_desc.outputs()) {
+    for (auto& argu : var.arguments()) {
+      if ((HasSubBlock(op_desc) || parent_block_id != -1) &&
+          feed_vars.count(argu) != 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // block_id is the idx of the current block in the input desc
 // parent_block_id is the idx of the parent of the current block
 // in the output desc, -1 means the current block is global block
 // dependent_vars is passed recursively from the parent block to
 // the child block to help pruning
-void prune_impl(const proto::ProgramDesc& input, proto::ProgramDesc* output,
-                int block_id, int parent_block_id,
+void prune_impl(const proto::ProgramDesc& input,
+                proto::ProgramDesc* output,
+                int block_id,
+                int parent_block_id,
                 std::unordered_set<std::string>* dependent_vars,
                 const std::set<std::string> feed_var_names,
                 std::map<int, int>* pruned_origin_block_id_map) {
@@ -173,7 +184,8 @@ void prune_impl(const proto::ProgramDesc& input, proto::ProgramDesc* output,
   bool expect_feed = true;
   for (auto& op_desc : ops) {
     PADDLE_ENFORCE_EQ(
-        op_desc.type() != kFeedOpType || expect_feed, true,
+        op_desc.type() != kFeedOpType || expect_feed,
+        true,
         platform::errors::PreconditionNotMet(
             "All FeedOps are at the beginning of the ProgramDesc"));
     expect_feed = (op_desc.type() == kFeedOpType);
@@ -182,7 +194,8 @@ void prune_impl(const proto::ProgramDesc& input, proto::ProgramDesc* output,
   bool expect_fetch = true;
   for (auto op_iter = ops.rbegin(); op_iter != ops.rend(); ++op_iter) {
     auto& op_desc = *op_iter;
-    PADDLE_ENFORCE_EQ(op_desc.type() != kFetchOpType || expect_fetch, true,
+    PADDLE_ENFORCE_EQ(op_desc.type() != kFetchOpType || expect_fetch,
+                      true,
                       platform::errors::PreconditionNotMet(
                           "All FetchOps must at the end of the ProgramDesc"));
     expect_fetch = (op_desc.type() == kFetchOpType);
@@ -192,8 +205,38 @@ void prune_impl(const proto::ProgramDesc& input, proto::ProgramDesc* output,
   for (auto op_iter = ops.rbegin(); op_iter != ops.rend(); ++op_iter) {
     auto& op_desc = *op_iter;
 
+    // TODO(wanghaipeng03) reconstruct the follwing if/else block
+    //                     to extract common code
+    //
+    // bool should_run_flag = false;
+    // if (IsTarget........) {
+    //   should_run_flag = true;
+    // } else {
+    //   if (parent......) {
+    //     for (....) {
+    //       for (.....) {
+    //         if (.....) {
+    //           should_run_flag = true;
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
+    //
+    // should_run.push_back(should_run_flag);
+    // if (should_run_flag) {
+    //   for (auto & var: op_desc.iputs()) {
+    //     for (....) {
+    //       if (.....) {
+    //         dependent_vars->insert(argu);
+    //       }
+    //     }
+    //   }
+    // }
+
     if (IsTarget(op_desc) ||
-        (HasDependentOutputVar(op_desc, *dependent_vars) &&
+        ((HasDependentOutputVar(op_desc, *dependent_vars) ||
+          (IsSubBlockDependent(op_desc, feed_var_names, parent_block_id))) &&
          (GetOpRole(op_desc) & static_cast<int>(OpRole::kOptimize)) == 0)) {
       // NOTE(zhiqiu): since optimize op takes the trainable parameters as
       // inputs and output, it may introduce wrong dependency graph.
@@ -210,23 +253,6 @@ void prune_impl(const proto::ProgramDesc& input, proto::ProgramDesc* output,
       should_run.push_back(true);
     } else {
       should_run.push_back(false);
-      // If the output of an op modifies feed vars, the op should not clip.
-      // For example, in the transformer structure, the third parameter returned
-      // by beam_search op is generally assigned to a feed var. Cutting the
-      // assign op will cause an error.
-      if (parent_block_id != -1) {
-        bool flag = false;
-        for (auto& var : op_desc.outputs()) {
-          for (auto& argu : var.arguments()) {
-            if (feed_var_names.count(argu)) {
-              flag = true;
-            }
-          }
-        }
-        if (flag) {
-          should_run.back() = true;
-        }
-      }
     }
   }
 
@@ -285,8 +311,12 @@ void prune_impl(const proto::ProgramDesc& input, proto::ProgramDesc* output,
         }
         // GetSubBlockIndex(*op) is the idx of the sub_block in the input desc
         // output_block_id is the idx of the current block in the output desc
-        prune_impl(input, output, GetSubBlockIndex(*op), output_block_id,
-                   &sub_block_dependent_vars, feed_var_names,
+        prune_impl(input,
+                   output,
+                   GetSubBlockIndex(*op),
+                   output_block_id,
+                   &sub_block_dependent_vars,
+                   feed_var_names,
                    pruned_origin_block_id_map);
       }
     }
@@ -333,7 +363,12 @@ std::map<int, int> Prune(const proto::ProgramDesc& input,
   std::unordered_set<std::string> dependent_vars;
   output->clear_blocks();
   std::map<int, int> pruned_origin_block_id_map;
-  prune_impl(input, output, 0, -1, &dependent_vars, feed_var_names,
+  prune_impl(input,
+             output,
+             0,
+             -1,
+             &dependent_vars,
+             feed_var_names,
              &pruned_origin_block_id_map);
   // update subblock idx
   for (int i = 0; i < output->blocks_size(); i++) {
@@ -345,7 +380,8 @@ std::map<int, int> Prune(const proto::ProgramDesc& input,
         int origin_sub_idx = GetSubBlockIndex(op_desc);
         auto sub_idx =
             FindMapByValue(pruned_origin_block_id_map, origin_sub_idx);
-        PADDLE_ENFORCE_NE(sub_idx, -1,
+        PADDLE_ENFORCE_NE(sub_idx,
+                          -1,
                           platform::errors::NotFound(
                               "The origin sub block id should be found in "
                               "pruned_progin_block_id_map"));
@@ -403,7 +439,7 @@ void PruneBackwardImpl(proto::BlockDesc* origin, proto::BlockDesc* pruned) {
   for (const auto& name : var_names) {
     if (var_map.count(name)) {
       // NOTE(zhiqiu): For operator in a conditional block, the related vars
-      // may not exist in current block, but in its futher block.
+      // may not exist in current block, but in its further block.
       *pruned_vars->Add() = var_map[name];
     }
   }
@@ -422,7 +458,7 @@ std::tuple<framework::ProgramDesc, std::map<int, int>> PruneBackward(
   for (size_t i = 0; i < origin_clone.Size(); i++) {
     auto block_ops = origin_clone.Block(i).AllOps();
     for (auto op : block_ops) {
-      int op_role = BOOST_GET_MUTABLE(
+      int op_role = PADDLE_GET_MUTABLE(
           int, op->GetAttr(OpProtoAndCheckerMaker::OpRoleAttrName()));
       if (op_role == (static_cast<int>(OpRole::kBackward) |
                       static_cast<int>(OpRole::kLoss))) {
@@ -467,7 +503,8 @@ std::tuple<framework::ProgramDesc, std::map<int, int>> PruneBackward(
       } else {
         auto parent_idx =
             FindMapByValue(pruned_progin_block_id_map, origin->parent_idx());
-        PADDLE_ENFORCE_NE(parent_idx, -1,
+        PADDLE_ENFORCE_NE(parent_idx,
+                          -1,
                           platform::errors::NotFound(
                               "The origin parent block id is not found in "
                               "pruned_progin_block_id_map"));
@@ -487,7 +524,8 @@ std::tuple<framework::ProgramDesc, std::map<int, int>> PruneBackward(
         int origin_sub_idx = GetSubBlockIndex(op_desc);
         auto sub_idx =
             FindMapByValue(pruned_progin_block_id_map, origin_sub_idx);
-        PADDLE_ENFORCE_NE(sub_idx, -1,
+        PADDLE_ENFORCE_NE(sub_idx,
+                          -1,
                           platform::errors::NotFound(
                               "The origin sub block id is not found in "
                               "pruned_progin_block_id_map"));

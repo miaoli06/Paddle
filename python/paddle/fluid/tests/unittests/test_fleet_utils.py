@@ -24,7 +24,6 @@ import sys
 from paddle.dataset.common import download, DATA_HOME
 import paddle.fluid.incubate.fleet.base.role_maker as role_maker
 from paddle.fluid.incubate.fleet.parameter_server.distribute_transpiler import fleet
-from paddle.fluid.incubate.fleet.utils.fleet_barrier_util import check_all_trainers_ready
 from paddle.fluid.incubate.fleet.utils.fleet_util import FleetUtil
 import paddle.fluid.incubate.fleet.utils.utils as utils
 
@@ -50,15 +49,6 @@ class TestFleetUtils(unittest.TestCase):
         fleet_util_transpiler = FleetUtil(mode="transpiler")
         self.assertRaises(Exception, FleetUtil, "other")
 
-    def test_fleet_barrier(self):
-        role = role_maker.UserDefinedRoleMaker(
-            current_id=0,
-            role=role_maker.Role.WORKER,
-            worker_num=1,
-            server_endpoints=['127.0.0.1'])
-        fleet.init(role)
-        check_all_trainers_ready("/ready_path/", 0)
-
     def test_program_type_trans(self):
         data_dir = self.download_files()
         program_dir = os.path.join(data_dir, self.pruned_dir)
@@ -77,8 +67,8 @@ class TestFleetUtils(unittest.TestCase):
     def test_parse_program_proto(self):
         data_dir = self.download_files()
         parse_program_file_path = os.path.join(
-            data_dir,
-            os.path.join(self.pruned_dir, "pruned_main_program.pbtxt"))
+            data_dir, os.path.join(self.pruned_dir,
+                                   "pruned_main_program.pbtxt"))
         is_text_parse_program = True
         parse_output_dir = os.path.join(data_dir, self.pruned_dir)
         fleet_util = FleetUtil()
@@ -129,8 +119,7 @@ class TestFleetUtils(unittest.TestCase):
         results = fleet_util.check_vars_and_dump(conf)
         self.assertTrue(len(results) == 1)
         np.testing.assert_array_almost_equal(
-            results[0], np.array(
-                [[3.0590223e-07]], dtype=np.float32))
+            results[0], np.array([[3.0590223e-07]], dtype=np.float32))
 
         # test feed_var's shape
         conf.dump_program_filename = "pruned_main_program.feed_var_shape_not_match"
@@ -141,8 +130,7 @@ class TestFleetUtils(unittest.TestCase):
         results = fleet_util.check_vars_and_dump(conf)
         self.assertTrue(len(results) == 1)
         np.testing.assert_array_almost_equal(
-            results[0], np.array(
-                [[3.0590223e-07]], dtype=np.float32))
+            results[0], np.array([[3.0590223e-07]], dtype=np.float32))
 
         # test correct case without feed_vars_filelist
         conf.feed_config.feeded_vars_filelist = None
@@ -178,8 +166,8 @@ class TestFleetUtils(unittest.TestCase):
 
         # test match
         conf.pruned_prog_path = os.path.join(
-            data_dir,
-            os.path.join(self.pruned_dir, "pruned_main_program.pbtxt"))
+            data_dir, os.path.join(self.pruned_dir,
+                                   "pruned_main_program.pbtxt"))
         if sys.platform == 'win32' or sys.platform == 'sys.platform':
             conf.draw = False
         else:
@@ -194,8 +182,8 @@ class TestFleetUtils(unittest.TestCase):
         else:
             data_dir = self.download_files()
             program_path = os.path.join(
-                data_dir,
-                os.path.join(self.train_dir, "join_main_program.pbtxt"))
+                data_dir, os.path.join(self.train_dir,
+                                       "join_main_program.pbtxt"))
             is_text = True
             program = utils.load_program(program_path, is_text)
             output_dir = os.path.join(data_dir, self.train_dir)

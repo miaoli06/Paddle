@@ -17,16 +17,10 @@ limitations under the License. */
 #include <unordered_set>
 #include <vector>
 
-#include "paddle/fluid/framework/ddim.h"
 #include "paddle/fluid/framework/eigen.h"
-
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/operators/math/sampler.h"
-namespace paddle {
-namespace platform {
-class CUDADeviceContext;
-}  // namespace platform
-}  // namespace paddle
+#include "paddle/phi/core/ddim.h"
 
 namespace paddle {
 namespace operators {
@@ -48,11 +42,14 @@ static T adjust_prob(const T prob, const int num_samples, const int num_tries) {
 template <typename DeviceContext, typename T>
 class SampleWithProb {
  public:
-  void operator()(const DeviceContext& context, const Sampler& sampler,
-                  const std::size_t num_samples, const Tensor* L, Tensor* S,
+  void operator()(const DeviceContext& context,
+                  const Sampler& sampler,
+                  const std::size_t num_samples,
+                  const Tensor* L,
+                  Tensor* S,
                   Tensor* P) {
     // UNDERSTAND: dimension issues
-    const auto lbl_dim = L->dims();
+    const auto& lbl_dim = L->dims();
     const int batch_size = lbl_dim[0];
     const int num_true = lbl_dim[1];
     const int num_sampled_classes = num_true + num_samples;
@@ -110,13 +107,17 @@ class SampleWithProb {
   }
 };
 
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 template <typename T>
 class GPUSampleWithProb {
  public:
-  void operator()(const platform::CUDADeviceContext& context, const int seed,
-                  const int dict_size, const bool uniq,
-                  const std::size_t num_samples, const Tensor* L, Tensor* S,
+  void operator()(const phi::GPUContext& context,
+                  const int seed,
+                  const int dict_size,
+                  const bool uniq,
+                  const std::size_t num_samples,
+                  const Tensor* L,
+                  Tensor* S,
                   Tensor* P);
 };
 #endif

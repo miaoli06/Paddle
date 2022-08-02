@@ -23,43 +23,33 @@ import paddle.fluid.layers as layers
 import paddle.fluid.core as core
 import gradient_checker
 from decorator_helper import prog_scope
+
 paddle.enable_static()
 
 
-class TestMulGradCheck(unittest.TestCase):
-    @prog_scope()
-    def func(self, place):
-        prog = fluid.Program()
-        with fluid.program_guard(prog):
-            x = layers.create_parameter(dtype="float64", shape=[2, 8], name='x')
-            y = layers.create_parameter(dtype="float64", shape=[8, 4], name='y')
-            z = layers.mul(x=x, y=y)
-            gradient_checker.grad_check([x, y], z, place=place)
-
-    def test_grad(self):
-        places = [fluid.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-        for p in places:
-            self.func(p)
-
-
 class TestSliceOpDoubleGradCheck(unittest.TestCase):
+
+    @prog_scope()
     def func(self, place):
         self.config()
 
-        out = fluid.layers.slice(
-            self.inputs, axes=self.axes, starts=self.starts, ends=self.ends)
-        gradient_checker.double_grad_check(
-            [self.inputs], out, x_init=self.x_arr, place=place)
+        out = fluid.layers.slice(self.inputs,
+                                 axes=self.axes,
+                                 starts=self.starts,
+                                 ends=self.ends)
+        gradient_checker.double_grad_check([self.inputs],
+                                           out,
+                                           x_init=self.x_arr,
+                                           place=place)
 
     def config(self):
         self.starts = [1, 0, -1]
         self.ends = [3, 3, 6]
         self.axes = [0, 1, 2]
         self.x_arr = np.random.random([3, 4, 5, 2]).astype("float64")
-        self.inputs = layers.create_parameter(
-            dtype="float64", shape=[3, 4, 5, 2], name='x')
+        self.inputs = layers.create_parameter(dtype="float64",
+                                              shape=[3, 4, 5, 2],
+                                              name='x')
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -70,16 +60,19 @@ class TestSliceOpDoubleGradCheck(unittest.TestCase):
 
 
 class TestSliceOpDoubleGradCheckCase3(TestSliceOpDoubleGradCheck):
+
     def config(self):
         self.starts = [1, -1, 1]
         self.ends = [3, 3, 3]
         self.axes = [0, 1, 2]
         self.x_arr = np.random.random([3, 3, 3]).astype("float64")
-        self.inputs = layers.create_parameter(
-            dtype="float64", shape=[3, 3, 3], name='x3')
+        self.inputs = layers.create_parameter(dtype="float64",
+                                              shape=[3, 3, 3],
+                                              name='x3')
 
 
 class TestReduceMeanWithDimDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         shape = [7, 11]
@@ -91,8 +84,11 @@ class TestReduceMeanWithDimDoubleGradCheck(unittest.TestCase):
         y = layers.reduce_mean(x, dim=0)
         x_arr = np.random.uniform(-1, 1, shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], y, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           y,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -103,6 +99,7 @@ class TestReduceMeanWithDimDoubleGradCheck(unittest.TestCase):
 
 
 class TestReduceSumWithDimDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         shape = [7, 11]
@@ -114,68 +111,11 @@ class TestReduceSumWithDimDoubleGradCheck(unittest.TestCase):
         y = layers.reduce_sum(x, dim=0)
         x_arr = np.random.uniform(-1, 1, shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], y, x_init=x_arr, place=place, eps=eps)
-
-    def test_grad(self):
-        places = [fluid.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-        for p in places:
-            self.func(p)
-
-
-class TestMulDoubleGradCheck(unittest.TestCase):
-    @prog_scope()
-    def func(self, place):
-        # the shape of input variable should be clearly specified, not inlcude -1.
-        x_shape = [7, 11]
-        y_shape = [11, 9]
-        eps = 0.005
-        dtype = np.float64
-
-        x = layers.data('x', x_shape, False, dtype)
-        x.persistable = True
-        y = layers.data('y', y_shape, False, dtype)
-        y.persistable = True
-        out = layers.mul(x, y)
-        x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
-        y_arr = np.random.uniform(-1, 1, y_shape).astype(dtype)
-
-        gradient_checker.double_grad_check(
-            [x, y], out, x_init=[x_arr, y_arr], place=place, eps=eps)
-
-    def test_grad(self):
-        places = [fluid.CPUPlace()]
-        if core.is_compiled_with_cuda():
-            places.append(fluid.CUDAPlace(0))
-        for p in places:
-            self.func(p)
-
-
-class TestMatmulDoubleGradCheck(unittest.TestCase):
-    @prog_scope()
-    def func(self, place):
-        eps = 0.005
-        x_shapes = [[2], [2, 3], [2, 4, 3], [2, 3, 4, 5], [2, 3, 4]]
-        y_shapes = [[2], [3, 2], [2, 4, 5], [2, 3, 3, 5], [4, 3]]
-        transpose_xs = [False, True, True, False, False]
-        transpose_ys = [False, True, False, True, False]
-        dtype = np.float64
-        typename = "float64"
-        for i, (x_shape, y_shape, transpose_x, transpose_y) \
-            in enumerate(zip(x_shapes, y_shapes, transpose_xs, transpose_ys)):
-            x = layers.create_parameter(
-                dtype=typename, shape=x_shape, name='x{}'.format(i))
-            y = layers.create_parameter(
-                dtype=typename, shape=y_shape, name='y{}'.format(i))
-            out = layers.matmul(
-                x, y, transpose_x, transpose_y, name='out{}'.format(i))
-
-            x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
-            y_arr = np.random.uniform(-1, 1, y_shape).astype(dtype)
-            gradient_checker.double_grad_check(
-                [x, y], out, x_init=[x_arr, y_arr], place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           y,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -186,6 +126,7 @@ class TestMatmulDoubleGradCheck(unittest.TestCase):
 
 
 class TestReshapeDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         x_shape = [3, 12]
@@ -198,8 +139,11 @@ class TestReshapeDoubleGradCheck(unittest.TestCase):
         out = layers.expand(x, expand_times)
         x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], out, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -210,6 +154,7 @@ class TestReshapeDoubleGradCheck(unittest.TestCase):
 
 
 class TestExpandDoubleGradCheck(unittest.TestCase):
+
     @prog_scope()
     def func(self, place):
         x_shape = [3, 12]
@@ -222,8 +167,11 @@ class TestExpandDoubleGradCheck(unittest.TestCase):
         out = layers.reshape(x, new_shape)
         x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], out, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -234,6 +182,10 @@ class TestExpandDoubleGradCheck(unittest.TestCase):
 
 
 class TestTileDoubleGradCheck(unittest.TestCase):
+
+    def tile_wrapper(self, x):
+        return paddle.tile(x[0], [4, 9])
+
     @prog_scope()
     def func(self, place):
         x_shape = [3, 12]
@@ -246,8 +198,15 @@ class TestTileDoubleGradCheck(unittest.TestCase):
         out = paddle.tile(x, repeat_times)
         x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], out, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
+        gradient_checker.double_grad_check_for_dygraph(self.tile_wrapper, [x],
+                                                       out,
+                                                       x_init=x_arr,
+                                                       place=place)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -258,6 +217,10 @@ class TestTileDoubleGradCheck(unittest.TestCase):
 
 
 class TestExpandV2DoubleGradCheck(unittest.TestCase):
+
+    def expand_wrapper(self, x):
+        return paddle.expand(x[0], [4, 12])
+
     @prog_scope()
     def func(self, place):
         x_shape = [1, 12]
@@ -270,8 +233,15 @@ class TestExpandV2DoubleGradCheck(unittest.TestCase):
         out = paddle.expand(x, new_shape)
         x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], out, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
+        gradient_checker.double_grad_check_for_dygraph(self.expand_wrapper, [x],
+                                                       out,
+                                                       x_init=x_arr,
+                                                       place=place)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -282,6 +252,11 @@ class TestExpandV2DoubleGradCheck(unittest.TestCase):
 
 
 class TestSqueezeDoubleGradCheck(unittest.TestCase):
+
+    def squeeze_warpper(self, x):
+        axes = [0, 2]
+        return paddle.squeeze(x[0], axes)
+
     @prog_scope()
     def func(self, place):
         x_shape = [1, 3, 1, 40]
@@ -294,8 +269,16 @@ class TestSqueezeDoubleGradCheck(unittest.TestCase):
         out = paddle.squeeze(x, axes)
         x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], out, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
+        gradient_checker.double_grad_check_for_dygraph(self.squeeze_warpper,
+                                                       [x],
+                                                       out,
+                                                       x_init=x_arr,
+                                                       place=place)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -306,6 +289,11 @@ class TestSqueezeDoubleGradCheck(unittest.TestCase):
 
 
 class TestUnsqueezeDoubleGradCheck(unittest.TestCase):
+
+    def unsqueeze_wrapper(self, x):
+        axes = [1, 2]
+        return paddle.unsqueeze(x[0], axes)
+
     @prog_scope()
     def func(self, place):
         x_shape = [3, 40]
@@ -318,8 +306,16 @@ class TestUnsqueezeDoubleGradCheck(unittest.TestCase):
         out = paddle.unsqueeze(x, axes)
         x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
 
-        gradient_checker.double_grad_check(
-            [x], out, x_init=x_arr, place=place, eps=eps)
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
+        gradient_checker.double_grad_check_for_dygraph(self.unsqueeze_wrapper,
+                                                       [x],
+                                                       out,
+                                                       x_init=x_arr,
+                                                       place=place)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]
@@ -330,6 +326,10 @@ class TestUnsqueezeDoubleGradCheck(unittest.TestCase):
 
 
 class TestClipDoubleGradCheck(unittest.TestCase):
+
+    def clip_wrapper(self, x):
+        return paddle.clip(x[0], min=-1., max=1.)
+
     @prog_scope()
     def func(self, place):
         x_shape = [2, 4, 10]
@@ -341,6 +341,287 @@ class TestClipDoubleGradCheck(unittest.TestCase):
         x_arr = np.random.uniform(-5., 5., x_shape).astype(dtype)
 
         gradient_checker.double_grad_check([x], out, x_init=x_arr, place=place)
+        gradient_checker.double_grad_check_for_dygraph(self.clip_wrapper, [x],
+                                                       out,
+                                                       x_init=x_arr,
+                                                       place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestTransposeDoubleGradCheck(unittest.TestCase):
+
+    @prog_scope()
+    def func(self, place):
+        x_shape = [3, 40]
+        perm = [1, 0]
+        dtype = np.float64
+
+        x = layers.data('x', x_shape, False, dtype)
+        x.persistable = True
+        out = paddle.transpose(x, perm)
+        x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+
+        gradient_checker.double_grad_check([x], out, x_init=x_arr, place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestTransposeDoubleGradCheckCase1(unittest.TestCase):
+
+    @prog_scope()
+    def func(self, place):
+        x_shape = [2, 3, 4, 5]
+        perm = [0, 2, 3, 1]
+        dtype = np.float64
+
+        x = layers.data('x', x_shape, False, dtype)
+        x.persistable = True
+        out = paddle.transpose(x, perm)
+        x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+
+        gradient_checker.double_grad_check([x], out, x_init=x_arr, place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestConstantPadDoubleGradCheck(unittest.TestCase):
+
+    def pad_wrapper(self, x):
+        pad = [1, 1, 1, 1]
+        return paddle.nn.functional.pad(x[0], pad)
+
+    @prog_scope()
+    def func(self, place):
+        x_shape = [2, 3, 4, 5]
+        pad = [1, 1, 1, 1]
+        eps = 0.005
+        dtype = np.float64
+
+        x = layers.data('x', x_shape, False, dtype)
+        x.persistable = True
+        out = paddle.nn.functional.pad(x, pad)
+        x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+
+        gradient_checker.double_grad_check([x],
+                                           out,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=eps)
+        gradient_checker.double_grad_check_for_dygraph(self.pad_wrapper, [x],
+                                                       out,
+                                                       x_init=x_arr,
+                                                       place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestConstantPadDoubleGradCheckCase1(TestConstantPadDoubleGradCheck):
+
+    @prog_scope()
+    def func(self, place):
+        x_shape = [2, 3, 4, 5]
+        pad = [1, 0, 1, 0, 1, 0, 1, 0]
+        dtype = np.float64
+
+        x = layers.data('x', x_shape, False, dtype)
+        x.persistable = True
+        out = paddle.nn.functional.pad(x, pad)
+        x_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+
+        gradient_checker.double_grad_check([x], out, x_init=x_arr, place=place)
+
+
+class TestConcatDoubleGradCheck(unittest.TestCase):
+
+    def concat_wrapper(self, x):
+        return paddle.concat(x, axis=0)
+
+    @prog_scope()
+    def func(self, place):
+        x_shape = [2, 3, 4, 5]
+        pad = [1, 1, 1, 1]
+        dtype = np.float64
+
+        x1 = layers.data('x', x_shape, False, dtype)
+        x2 = layers.data('x', x_shape, False, dtype)
+        x1.persistable = True
+        x2.persistable = True
+        out = paddle.concat([x1, x2], axis=0)
+        x2_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+        x1_arr = np.random.uniform(-1, 1, x_shape).astype(dtype)
+
+        gradient_checker.double_grad_check([x1, x2],
+                                           out,
+                                           x_init=[x1_arr, x2_arr],
+                                           place=place)
+        gradient_checker.double_grad_check_for_dygraph(self.concat_wrapper,
+                                                       [x1, x2],
+                                                       out,
+                                                       x_init=[x1_arr, x2_arr],
+                                                       place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestAvgPool2DDoubleGradCheckCase1(unittest.TestCase):
+
+    @prog_scope()
+    def func(self, place):
+        input_NCHW = fluid.layers.data(name="input_NCHW",
+                                       shape=[2, 3, 5, 5],
+                                       append_batch_size=False,
+                                       dtype="float32")
+
+        input_NCHW.persistable = True
+        y = layers.pool2d(input_NCHW, pool_size=2, pool_type="avg")
+        x_arr = np.random.uniform(-1, 1, [2, 3, 5, 5]).astype(np.float32)
+
+        gradient_checker.double_grad_check([input_NCHW],
+                                           y,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=0.05)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestAvgPool2DDoubleGradCheckCase2(unittest.TestCase):
+
+    def pool2d_wrapper(self, x):
+        return paddle.nn.functional.avg_pool2d(x[0],
+                                               kernel_size=2,
+                                               data_format="NHWC")
+
+    @prog_scope()
+    def func(self, place):
+        input_NHWC = fluid.layers.data(name="input_NHWC",
+                                       shape=[2, 5, 5, 3],
+                                       append_batch_size=False,
+                                       dtype="float32")
+
+        input_NHWC.persistable = True
+        y = paddle.nn.functional.avg_pool2d(input_NHWC,
+                                            kernel_size=2,
+                                            data_format="NHWC")
+        x_arr = np.random.uniform(-1, 1, [2, 5, 5, 3]).astype(np.float32)
+
+        gradient_checker.double_grad_check([input_NHWC],
+                                           y,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=0.05)
+
+        gradient_checker.double_grad_check_for_dygraph(self.pool2d_wrapper,
+                                                       [input_NHWC],
+                                                       y,
+                                                       x_init=x_arr,
+                                                       place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestAvgPool2DDoubleGradCheckCase3(unittest.TestCase):
+
+    def pool2d_wrapper(self, x):
+        return paddle.nn.functional.avg_pool2d(x[0],
+                                               kernel_size=2,
+                                               padding=[1, 1])
+
+    @prog_scope()
+    def func(self, place):
+        input_NCHW = fluid.layers.data(name="input_NCHW",
+                                       shape=[2, 3, 5, 5],
+                                       append_batch_size=False,
+                                       dtype="float32")
+
+        input_NCHW.persistable = True
+        y = paddle.nn.functional.avg_pool2d(input_NCHW,
+                                            kernel_size=2,
+                                            padding=[1, 1])
+        x_arr = np.random.uniform(-1, 1, [2, 3, 5, 5]).astype(np.float32)
+
+        gradient_checker.double_grad_check([input_NCHW],
+                                           y,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=0.05)
+        gradient_checker.double_grad_check_for_dygraph(self.pool2d_wrapper,
+                                                       [input_NCHW],
+                                                       y,
+                                                       x_init=x_arr,
+                                                       place=place)
+
+    def test_grad(self):
+        places = [fluid.CPUPlace()]
+        if core.is_compiled_with_cuda():
+            places.append(fluid.CUDAPlace(0))
+        for p in places:
+            self.func(p)
+
+
+class TestAvgPool2DDoubleGradCheckCase4(unittest.TestCase):
+
+    def pool2d_wrapper(self, x):
+        return paddle.nn.functional.avg_pool2d(x[0], kernel_size=[4, 4])
+
+    @prog_scope()
+    def func(self, place):
+        input_NCHW = fluid.layers.data(name="input_NCHW",
+                                       shape=[2, 3, 5, 5],
+                                       append_batch_size=False,
+                                       dtype="float32")
+
+        input_NCHW.persistable = True
+        y = layers.pool2d(input_NCHW, pool_size=[4, 4], pool_type="avg")
+        y = paddle.nn.functional.avg_pool2d(input_NCHW, kernel_size=[4, 4])
+        x_arr = np.random.uniform(-1, 1, [2, 3, 5, 5]).astype(np.float32)
+
+        gradient_checker.double_grad_check([input_NCHW],
+                                           y,
+                                           x_init=x_arr,
+                                           place=place,
+                                           eps=0.05)
+        gradient_checker.double_grad_check_for_dygraph(self.pool2d_wrapper,
+                                                       [input_NCHW],
+                                                       y,
+                                                       x_init=x_arr,
+                                                       place=place)
 
     def test_grad(self):
         places = [fluid.CPUPlace()]

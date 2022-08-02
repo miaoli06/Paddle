@@ -31,11 +31,12 @@ inline std::vector<int> get_new_shape_xpu(
   for (size_t i = 0; i < list_new_shape_tensor.size(); ++i) {
     auto tensor = list_new_shape_tensor[i];
     PADDLE_ENFORCE_EQ(
-        tensor->dims(), framework::make_ddim({1}),
+        tensor->dims(),
+        phi::make_ddim({1}),
         platform::errors::InvalidArgument("shape of dim tensor should be [1]"));
     if (platform::is_xpu_place(tensor->place())) {
       framework::Tensor temp;
-      TensorCopySync(*tensor, platform::CPUPlace(), &temp);
+      paddle::framework::TensorCopySync(*tensor, platform::CPUPlace(), &temp);
       vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
     } else {
       vec_new_shape.push_back(static_cast<int32_t>(*tensor->data<int32_t>()));
@@ -52,7 +53,8 @@ inline std::vector<T> get_new_data_from_tensor_xpu(
   auto* new_data = new_data_tensor->data<T>();
   framework::Tensor cpu_starts_tensor;
   if (platform::is_xpu_place(new_data_tensor->place())) {
-    TensorCopySync(*new_data_tensor, platform::CPUPlace(), &cpu_starts_tensor);
+    paddle::framework::TensorCopySync(
+        *new_data_tensor, platform::CPUPlace(), &cpu_starts_tensor);
     new_data = cpu_starts_tensor.data<T>();
   }
   vec_new_data = std::vector<T>(new_data, new_data + new_data_tensor->numel());
@@ -68,7 +70,8 @@ class InterpolateXPUKernel : public framework::OpKernel<T> {
 
     auto input_dims = input->dims();
     PADDLE_ENFORCE_EQ(
-        input_dims.size(), 4,
+        input_dims.size(),
+        4,
         platform::errors::External("XPU Interpolate kernel only support 2d"));
 
     const std::string data_layout_str = ctx.Attr<std::string>("data_layout");
@@ -110,14 +113,18 @@ class InterpolateXPUKernel : public framework::OpKernel<T> {
         out_w = out_size_data[1];
       }
     }
-    PADDLE_ENFORCE_GT(out_h, 0, platform::errors::InvalidArgument(
-                                    "out_h in Attr(out_shape) of "
-                                    "Op(interpolate) "
-                                    "should be greater than 0."));
-    PADDLE_ENFORCE_GT(out_w, 0, platform::errors::InvalidArgument(
-                                    "out_w in Attr(out_shape) of "
-                                    "Op(interpolate) "
-                                    "should be greater than 0."));
+    PADDLE_ENFORCE_GT(
+        out_h,
+        0,
+        platform::errors::InvalidArgument("out_h in Attr(out_shape) of "
+                                          "Op(interpolate) "
+                                          "should be greater than 0."));
+    PADDLE_ENFORCE_GT(
+        out_w,
+        0,
+        platform::errors::InvalidArgument("out_w in Attr(out_shape) of "
+                                          "Op(interpolate) "
+                                          "should be greater than 0."));
     framework::DDim dim_out;
     if (data_layout == DataLayout::kNCHW) {
       dim_out = {n, c, out_h, out_w};
@@ -134,18 +141,29 @@ class InterpolateXPUKernel : public framework::OpKernel<T> {
     int trans_mode = (align_corners) ? (0) : ((align_mode == 0) ? (1) : (2));
     auto& dev_ctx = ctx.template device_context<platform::XPUDeviceContext>();
     if (nearest) {
-      PADDLE_ENFORCE_EQ((data_layout == DataLayout::kNCHW), true,
+      PADDLE_ENFORCE_EQ((data_layout == DataLayout::kNCHW),
+                        true,
                         platform::errors::InvalidArgument(
                             "XPU nearest is only support NCHW"));
     }
-    int r = xpu::interpolate2d<float>(dev_ctx.x_context(), input->data<float>(),
-                                      output->data<float>(), n, c, in_h, in_w,
-                                      out_h, out_w, nearest, trans_mode,
+    int r = xpu::interpolate2d<float>(dev_ctx.x_context(),
+                                      input->data<float>(),
+                                      output->data<float>(),
+                                      n,
+                                      c,
+                                      in_h,
+                                      in_w,
+                                      out_h,
+                                      out_w,
+                                      nearest,
+                                      trans_mode,
                                       (data_layout == DataLayout::kNCHW));
-    PADDLE_ENFORCE_EQ(r, XPU_SUCCESS,
+    PADDLE_ENFORCE_EQ(r,
+                      XPU_SUCCESS,
                       platform::errors::External("XPU interpolate2d kernel "
                                                  "return wrong value[%d %s]",
-                                                 r, XPUAPIErrorMsg[r]));
+                                                 r,
+                                                 XPUAPIErrorMsg[r]));
   }
 };
 
@@ -158,7 +176,8 @@ class InterpolateGradXPUKernel : public framework::OpKernel<T> {
 
     auto output_grad_dims = output_grad->dims();
 
-    PADDLE_ENFORCE_EQ(output_grad_dims.size(), 4,
+    PADDLE_ENFORCE_EQ(output_grad_dims.size(),
+                      4,
                       platform::errors::External(
                           "XPU Interpolategrad kernel only support 2d"));
 
@@ -212,13 +231,17 @@ class InterpolateGradXPUKernel : public framework::OpKernel<T> {
     auto& dev_ctx = ctx.template device_context<platform::XPUDeviceContext>();
 
     int r = XPU_SUCCESS;
-    r = xpu::constant<T>(dev_ctx.x_context(), input_grad->data<T>(),
-                         input_grad->numel(), static_cast<T>(0.0));
-    PADDLE_ENFORCE_EQ(r, XPU_SUCCESS,
+    r = xpu::constant<T>(dev_ctx.x_context(),
+                         input_grad->data<T>(),
+                         input_grad->numel(),
+                         static_cast<T>(0.0));
+    PADDLE_ENFORCE_EQ(r,
+                      XPU_SUCCESS,
                       platform::errors::External(
                           "XPU constant in interpolate2d_grad kernel return "
                           "wrong value[%d %s]",
-                          r, XPUAPIErrorMsg[r]));
+                          r,
+                          XPUAPIErrorMsg[r]));
 
     if (in_h == out_h && in_w == out_w) {
       framework::TensorCopy(*output_grad, ctx.GetPlace(), input_grad);
@@ -229,20 +252,28 @@ class InterpolateGradXPUKernel : public framework::OpKernel<T> {
     int trans_mode = (align_corners) ? (0) : ((align_mode == 0) ? (1) : (2));
 
     if (nearest) {
-      PADDLE_ENFORCE_EQ((data_layout == DataLayout::kNCHW), true,
-                        platform::errors::InvalidArgument(
-                            "XPU nearest is only support NCHW"));
+      trans_mode = (align_corners) ? (0) : (2);
     }
 
-    r = xpu::interpolate2d_grad<T>(dev_ctx.x_context(), output_grad->data<T>(),
-                                   input_grad->data<T>(), n, c, in_h, in_w,
-                                   out_h, out_w, nearest, trans_mode,
+    r = xpu::interpolate2d_grad<T>(dev_ctx.x_context(),
+                                   output_grad->data<T>(),
+                                   input_grad->data<T>(),
+                                   n,
+                                   c,
+                                   in_h,
+                                   in_w,
+                                   out_h,
+                                   out_w,
+                                   nearest,
+                                   trans_mode,
                                    (data_layout == DataLayout::kNCHW));
     PADDLE_ENFORCE_EQ(
-        r, XPU_SUCCESS,
+        r,
+        XPU_SUCCESS,
         platform::errors::External("XPU interpolate2d_grad kernel return "
                                    "wrong value[%d %s]",
-                                   r, XPUAPIErrorMsg[r]));
+                                   r,
+                                   XPUAPIErrorMsg[r]));
   }
 };
 
@@ -252,7 +283,10 @@ class InterpolateGradXPUKernel : public framework::OpKernel<T> {
 namespace ops = paddle::operators;
 
 REGISTER_OP_XPU_KERNEL(bilinear_interp, ops::InterpolateXPUKernel<float>);
+REGISTER_OP_XPU_KERNEL(nearest_interp, ops::InterpolateXPUKernel<float>);
 
 REGISTER_OP_XPU_KERNEL(bilinear_interp_grad,
+                       ops::InterpolateGradXPUKernel<float>);
+REGISTER_OP_XPU_KERNEL(nearest_interp_grad,
                        ops::InterpolateGradXPUKernel<float>);
 #endif

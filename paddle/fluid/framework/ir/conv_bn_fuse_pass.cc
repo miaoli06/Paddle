@@ -15,16 +15,17 @@
 #include "paddle/fluid/framework/ir/conv_bn_fuse_pass.h"
 
 #include <string>
-#include <vector>
 
-#include "paddle/fluid/framework/lod_tensor.h"
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/operators/math/cpu_vec.h"
 #include "paddle/fluid/platform/enforce.h"
+
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace framework {
-class LoDTensor;
 class Scope;
 }  // namespace framework
 }  // namespace paddle
@@ -60,7 +61,8 @@ void recompute_bias_and_weights(const Scope* scope,
                                 const ir::Node& bn_mean,          //
                                 const ir::Node& bn_variance,      //
                                 LoDTensor* eltwise_y_in_tensor,   //
-                                float epsilon, const std::string& conv_type) {
+                                float epsilon,
+                                const std::string& conv_type) {
   using EigenVectorArrayMap =
       Eigen::Map<Eigen::Array<float, Eigen::Dynamic, 1>>;
   using ConstEigenVectorArrayMap =
@@ -70,7 +72,8 @@ void recompute_bias_and_weights(const Scope* scope,
 
   // Re-compute bias of conv2d from BN
   PADDLE_ENFORCE_EQ(
-      eltwise_y_in_tensor->dims(), bn_bias_tensor.dims(),
+      eltwise_y_in_tensor->dims(),
+      bn_bias_tensor.dims(),
       platform::errors::InvalidArgument("Tensor elementwise y(%d) and batch "
                                         "norm bias(%d) must have same dims.",
                                         eltwise_y_in_tensor->dims().size(),
@@ -81,27 +84,46 @@ void recompute_bias_and_weights(const Scope* scope,
       scope->FindVar(bn_variance.Name())->GetMutable<LoDTensor>();
   auto* mean_tensor = scope->FindVar(bn_mean.Name())->GetMutable<LoDTensor>();
 
-  ConstEigenVectorArrayMap scale_array(scale_tensor->data<float>(),
-                                       scale_tensor->numel(), 1);
+  ConstEigenVectorArrayMap scale_array(
+      scale_tensor->data<float>(), scale_tensor->numel(), 1);
   EigenVectorArrayMap variance_array(
       variance_tensor->mutable_data<float>(platform::CPUPlace()),
-      variance_tensor->numel(), 1);
-  ConstEigenVectorArrayMap mean_array(mean_tensor->data<float>(),
-                                      mean_tensor->numel(), 1);
-  ConstEigenVectorArrayMap bn_bias_array(bn_bias_tensor.data<float>(),
-                                         bn_bias_tensor.numel(), 1);
+      variance_tensor->numel(),
+      1);
+  ConstEigenVectorArrayMap mean_array(
+      mean_tensor->data<float>(), mean_tensor->numel(), 1);
+  ConstEigenVectorArrayMap bn_bias_array(
+      bn_bias_tensor.data<float>(), bn_bias_tensor.numel(), 1);
 
   // variance will not be used anymore, so make it std_array and then tmp_array
   variance_array += epsilon;
   variance_array = variance_array.sqrt();
   variance_array = scale_array / variance_array;
-
+  for (int i = 0; i < variance_tensor->numel(); i++) {
+    PADDLE_ENFORCE_EQ(std::isfinite(variance_array[i]),
+                      true,
+                      platform::errors::InvalidArgument(
+                          "The inverse of Fused batch norm variance "
+                          "should be finite. Found nonfinite values! "
+                          "Please check %s ",
+                          bn_variance.Name()));
+  }
   EigenVectorArrayMap eltwise_y_in_array(
       eltwise_y_in_tensor->mutable_data<float>(platform::CPUPlace()),
-      eltwise_y_in_tensor->numel(), 1);
+      eltwise_y_in_tensor->numel(),
+      1);
 
   eltwise_y_in_array =
       ((eltwise_y_in_array - mean_array) * variance_array) + bn_bias_array;
+  for (int i = 0; i < eltwise_y_in_tensor->numel(); i++) {
+    PADDLE_ENFORCE_EQ(std::isfinite(eltwise_y_in_array[i]),
+                      true,
+                      platform::errors::InvalidArgument(
+                          "Fused batch norm bias should be "
+                          "finite. Found nonfinite values! "
+                          "Please check %s and related variables.",
+                          bn_variance.Name()));
+  }
 
   // Re-compute weight of conv2d from BN
   auto* weights = scope->FindVar(conv_weight->Name())->GetMutable<LoDTensor>();
@@ -119,13 +141,107 @@ void recompute_bias_and_weights(const Scope* scope,
       }
     }
   } else {
-    auto weights_shape_2d = flatten_to_2d(weights_shape, 1);
+    auto weights_shape_2d = phi::flatten_to_2d(weights_shape, 1);
 
-    EigenMatrixArrayMap weights_array_2d(weights_data, weights_shape_2d[0],
-                                         weights_shape_2d[1]);
+    EigenMatrixArrayMap weights_array_2d(
+        weights_data, weights_shape_2d[0], weights_shape_2d[1]);
 
     weights_array_2d.colwise() *= variance_array;
   }
+}
+
+ConvBNFusePass::ConvBNFusePass() {
+  AddOpCompat(OpCompat("conv2d"))
+      .AddInput("Input")
+      .IsTensor()
+      .End()
+      .AddInput("Filter")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddInput("ResidualData")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddOutput("Output")
+      .IsTensor()
+      .End()
+      .AddAttr("strides")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("paddings")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("padding_algorithm")
+      .IsOptional()
+      .IsStringIn({"EXPLICIT", "SAME", "VALID"})
+      .End()
+      .AddAttr("groups")
+      .IsNumGE(1)
+      .End()
+      .AddAttr("dilations")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("data_format")
+      .IsStringIn({"NCHW", "NHWC", "AnyLayout"})
+      .End();
+
+  AddOpCompat(OpCompat("batch_norm"))
+      .AddInput("X")
+      .IsTensor()
+      .End()
+      .AddInput("Scale")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .End()
+      .AddInput("Mean")
+      .IsTensor()
+      .End()
+      .AddInput("Variance")
+      .IsTensor()
+      .End()
+      .AddOutput("MeanOut")
+      .IsTensor()
+      .End()
+      .AddOutput("VarianceOut")
+      .IsTensor()
+      .End()
+      .AddOutput("SavedMean")
+      .IsTensor()
+      .End()
+      .AddOutput("SavedVariance")
+      .IsTensor()
+      .End()
+      .AddOutput("Y")
+      .IsTensor()
+      .End()
+      .AddOutput("ReserveSpace")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddAttr("epsilon")
+      .IsNumLE(0.001f)
+      .IsNumGE(0.0f)
+      .End();
+
+  AddOpCompat(OpCompat("elementwise_add"))
+      .AddInput("X")
+      .IsTensor()
+      .End()
+      .AddInput("Y")
+      .IsTensor()
+      .End()
+      .AddOutput("Out")
+      .IsTensor()
+      .End()
+      .AddAttr("axis")
+      .IsNumEQ(1)
+      .End();
 }
 
 void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
@@ -149,8 +265,11 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
   int found_conv_bn_count = 0;
   auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
                      Graph* g) {
+    if (!IsCompat(subgraph, g)) {
+      LOG(WARNING) << "Pass in op compat failed.";
+      return;
+    }
     VLOG(4) << "handle " + conv_type() + "BN fuse";
-
     // conv, batch_norm,
     // conv_weight, conv_out,
     // bn_scale, bn_bias, bn_mean, bn_variance,
@@ -165,6 +284,27 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
       return;
     }
 
+    // conv_weight fp32 --> fp16
+    auto* conv_weight_tensor =
+        scope->FindVar(conv_weight->Name())->GetMutable<LoDTensor>();
+    auto tensor_type = conv_weight_tensor->dtype();
+
+    if (tensor_type == paddle::experimental::DataType::FLOAT16) {
+      framework::Tensor weight_float_tensor;
+      weight_float_tensor.set_type(paddle::experimental::DataType::FLOAT32);
+      weight_float_tensor.Resize(conv_weight_tensor->dims());
+      auto* weight_float_data =
+          weight_float_tensor.mutable_data<float>(platform::CPUPlace());
+      auto* data =
+          conv_weight_tensor->mutable_data<float16>(platform::CPUPlace());
+      for (int i = 0; i < conv_weight_tensor->numel(); i++) {
+        weight_float_data[i] = static_cast<float>(data[i]);
+      }
+      conv_weight_tensor->clear();
+      paddle::framework::TensorCopySync(
+          weight_float_tensor, platform::CPUPlace(), conv_weight_tensor);
+    }
+
     // Get batch norm bias
     auto* bn_bias_tensor =
         scope->FindVar(bn_bias->Name())->GetMutable<LoDTensor>();
@@ -172,8 +312,9 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
     // Create eltwise_y (conv bias) variable
     VarDesc eltwise_y_in_desc(
         patterns::PDNodeName("fuse_conv_bn", conv_type() + "_eltwise_y_in"));
-    eltwise_y_in_desc.SetShape(framework::vectorize(bn_bias_tensor->dims()));
-    eltwise_y_in_desc.SetDataType(bn_bias_tensor->type());
+    eltwise_y_in_desc.SetShape(phi::vectorize(bn_bias_tensor->dims()));
+    eltwise_y_in_desc.SetDataType(
+        framework::TransToProtoVarType(bn_bias_tensor->dtype()));
     eltwise_y_in_desc.SetLoDLevel(bn_bias->Var()->GetLoDLevel());
     eltwise_y_in_desc.SetPersistable(true);
     auto* eltwise_y_in_node = g->CreateVarNode(&eltwise_y_in_desc);
@@ -183,31 +324,78 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
     // Initialize eltwise_y
     eltwise_y_in_tensor->Resize(bn_bias_tensor->dims());
     std::fill_n(eltwise_y_in_tensor->mutable_data<float>(platform::CPUPlace()),
-                eltwise_y_in_tensor->numel(), 0.0f);
+                eltwise_y_in_tensor->numel(),
+                0.0f);
 
     // update weights and biases
     float epsilon =
-        BOOST_GET_CONST(float, batch_norm->Op()->GetAttr("epsilon"));
-    recompute_bias_and_weights(scope, conv_weight, *bn_scale, *bn_bias_tensor,
-                               *bn_mean, *bn_variance, eltwise_y_in_tensor,
-                               epsilon, conv_type());
+        PADDLE_GET_CONST(float, batch_norm->Op()->GetAttr("epsilon"));
+    recompute_bias_and_weights(scope,
+                               conv_weight,
+                               *bn_scale,
+                               *bn_bias_tensor,
+                               *bn_mean,
+                               *bn_variance,
+                               eltwise_y_in_tensor,
+                               epsilon,
+                               conv_type());
+
+    if (tensor_type == paddle::experimental::DataType::FLOAT16) {
+      {
+        framework::Tensor weight_float16_tensor;
+        weight_float16_tensor.set_type(paddle::experimental::DataType::FLOAT16);
+        weight_float16_tensor.Resize(conv_weight_tensor->dims());
+        auto* weight_float16_data =
+            weight_float16_tensor.mutable_data<float16>(platform::CPUPlace());
+        auto* data =
+            conv_weight_tensor->mutable_data<float>(platform::CPUPlace());
+        for (int i = 0; i < conv_weight_tensor->numel(); i++) {
+          weight_float16_data[i] = static_cast<float16>(data[i]);
+        }
+        conv_weight_tensor->clear();
+        paddle::framework::TensorCopySync(
+            weight_float16_tensor, platform::CPUPlace(), conv_weight_tensor);
+      }
+
+      {
+        framework::Tensor eltwise_y_in_float16_tensor;
+        eltwise_y_in_float16_tensor.set_type(
+            paddle::experimental::DataType::FLOAT16);
+        eltwise_y_in_float16_tensor.Resize(eltwise_y_in_tensor->dims());
+        auto* eltwise_y_in_float16_data =
+            eltwise_y_in_float16_tensor.mutable_data<float16>(
+                platform::CPUPlace());
+        auto* data =
+            eltwise_y_in_tensor->mutable_data<float>(platform::CPUPlace());
+        for (int i = 0; i < eltwise_y_in_tensor->numel(); i++) {
+          eltwise_y_in_float16_data[i] = static_cast<float16>(data[i]);
+        }
+        eltwise_y_in_tensor->clear();
+        paddle::framework::TensorCopySync(eltwise_y_in_float16_tensor,
+                                          platform::CPUPlace(),
+                                          eltwise_y_in_tensor);
+      }
+    }
 
     // with MKL-DNN fuse conv+bn into conv with bias
     // without MKL-DNN fuse conv+bn into conv+elementwise_add
     if (fuse_option == FUSE_MKLDNN) {
       auto input_names = conv->Op()->InputNames();
-      bool has_bias = std::find(input_names.begin(), input_names.end(),
-                                "Bias") != input_names.end();
+      bool has_bias =
+          std::find(input_names.begin(), input_names.end(), "Bias") !=
+          input_names.end();
       if (has_bias && conv->Op()->Input("Bias").size() > 0) {
         // reuse existing conv bias node
         auto conv_bias_names = conv->Op()->Input("Bias");
         PADDLE_ENFORCE_EQ(
-            conv_bias_names.size(), 1UL,
+            conv_bias_names.size(),
+            1UL,
             platform::errors::InvalidArgument("Find input var Bais error."));
         auto* conv_bias_var = scope->FindVar(conv_bias_names[0]);
         auto* conv_bias_tensor = conv_bias_var->GetMutable<LoDTensor>();
         PADDLE_ENFORCE_EQ(
-            conv_bias_tensor->dims(), eltwise_y_in_tensor->dims(),
+            conv_bias_tensor->dims(),
+            eltwise_y_in_tensor->dims(),
             platform::errors::InvalidArgument(
                 "Tensor convolution bias(%d) and elementwise y(%d) "
                 "must have same dims.",
@@ -224,10 +412,21 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
       }
       conv->Op()->SetOutput("Output",
                             std::vector<std::string>({bn_out->Name()}));
-      GraphSafeRemoveNodes(
-          graph,
-          {conv_out, bn_scale, bn_bias, bn_mean, bn_variance, batch_norm,
-           bn_mean_out, bn_variance_out, bn_saved_mean, bn_saved_variance});
+      if (!IsCompat(*conv->Op())) {
+        LOG(WARNING) << "conv_bn fuse pass in out conv op compat failed.";
+        return;
+      }
+      GraphSafeRemoveNodes(graph,
+                           {conv_out,
+                            bn_scale,
+                            bn_bias,
+                            bn_mean,
+                            bn_variance,
+                            batch_norm,
+                            bn_mean_out,
+                            bn_variance_out,
+                            bn_saved_mean,
+                            bn_saved_variance});
 
       IR_NODE_LINK_TO(conv, bn_out);
       found_conv_bn_count++;
@@ -239,11 +438,23 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
       desc.SetOutput("Out", std::vector<std::string>({bn_out->Name()}));
       desc.SetType("elementwise_add");
       desc.SetAttr("axis", 1);
+      if (!IsCompat(desc)) {
+        LOG(WARNING)
+            << "conv_bn fuse pass in out elementwise_add op compat failed.";
+        return;
+      }
       auto eltwise_op = g->CreateOpNode(&desc);  // OpDesc will be copied.
 
-      GraphSafeRemoveNodes(graph, {bn_scale, bn_bias, bn_mean, bn_variance,
-                                   batch_norm, bn_mean_out, bn_variance_out,
-                                   bn_saved_mean, bn_saved_variance});
+      GraphSafeRemoveNodes(graph,
+                           {bn_scale,
+                            bn_bias,
+                            bn_mean,
+                            bn_variance,
+                            batch_norm,
+                            bn_mean_out,
+                            bn_variance_out,
+                            bn_saved_mean,
+                            bn_saved_variance});
 
       IR_NODE_LINK_TO(conv_out, eltwise_op);
       IR_NODE_LINK_TO(eltwise_y_in_node, eltwise_op);
@@ -255,6 +466,100 @@ void ConvBNFusePass::ApplyImpl(ir::Graph* graph) const {
   gpd(graph, handler);
 
   AddStatis(found_conv_bn_count);
+}
+
+ConvEltwiseAddBNFusePass::ConvEltwiseAddBNFusePass() {
+  AddOpCompat(OpCompat("conv2d"))
+      .AddInput("Input")
+      .IsTensor()
+      .End()
+      .AddInput("Filter")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddInput("ResidualData")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddOutput("Output")
+      .IsTensor()
+      .End()
+      .AddAttr("strides")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("paddings")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("padding_algorithm")
+      .IsStringIn({"EXPLICIT", "SAME", "VALID"})
+      .IsOptional()
+      .End()
+      .AddAttr("groups")
+      .IsNumGE(1)
+      .End()
+      .AddAttr("dilations")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("data_format")
+      .IsStringIn({"NCHW", "NHWC", "AnyLayout"})
+      .End();
+
+  AddOpCompat(OpCompat("batch_norm"))
+      .AddInput("X")
+      .IsTensor()
+      .End()
+      .AddInput("Scale")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .End()
+      .AddInput("Mean")
+      .IsTensor()
+      .End()
+      .AddInput("Variance")
+      .IsTensor()
+      .End()
+      .AddOutput("MeanOut")
+      .IsTensor()
+      .End()
+      .AddOutput("VarianceOut")
+      .IsTensor()
+      .End()
+      .AddOutput("SavedMean")
+      .IsTensor()
+      .End()
+      .AddOutput("SavedVariance")
+      .IsTensor()
+      .End()
+      .AddOutput("Y")
+      .IsTensor()
+      .End()
+      .AddOutput("ReserveSpace")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddAttr("epsilon")
+      .IsNumLE(0.001f)
+      .IsNumGE(0.0f)
+      .End();
+
+  AddOpCompat(OpCompat("elementwise_add"))
+      .AddInput("X")
+      .IsTensor()
+      .End()
+      .AddInput("Y")
+      .IsTensor()
+      .End()
+      .AddOutput("Out")
+      .IsTensor()
+      .End()
+      .AddAttr("axis")
+      .IsNumEQ(1)
+      .End();
 }
 
 void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
@@ -278,8 +583,11 @@ void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
   int found_conv_bn_count = 0;
   auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
                      Graph* g) {
+    if (!IsCompat(subgraph, g)) {
+      LOG(WARNING) << "Pass in op compat failed.";
+      return;
+    }
     VLOG(4) << "handle " + conv_type() + "BN fuse";
-
     // conv, batch_norm,
     // conv_weight, conv_out,
     // bn_scale, bn_bias, bn_mean, bn_variance,
@@ -302,7 +610,7 @@ void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
 
     // update weights and biases
     float epsilon =
-        BOOST_GET_CONST(float, batch_norm->Op()->GetAttr("epsilon"));
+        PADDLE_GET_CONST(float, batch_norm->Op()->GetAttr("epsilon"));
 
     // if bias is an input to other ops as well then we cannot overwrite it
     // so we create separate elementwise Y in nodes
@@ -311,9 +619,9 @@ void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
       // Create eltwise_y (conv bias) variable
       VarDesc eltwise_y_in_desc(patterns::PDNodeName(
           name_scope_, "eltwise_y_in" + std::to_string(found_conv_bn_count)));
-      eltwise_y_in_desc.SetShape(
-          framework::vectorize(eltwise_y_in_tensor->dims()));
-      eltwise_y_in_desc.SetDataType(eltwise_y_in_tensor->type());
+      eltwise_y_in_desc.SetShape(phi::vectorize(eltwise_y_in_tensor->dims()));
+      eltwise_y_in_desc.SetDataType(
+          framework::TransToProtoVarType(eltwise_y_in_tensor->dtype()));
       eltwise_y_in_desc.SetLoDLevel(eltwise_y_in->Var()->GetLoDLevel());
       eltwise_y_in_desc.SetPersistable(true);
       auto* eltwise_y_in_node = g->CreateVarNode(&eltwise_y_in_desc);
@@ -321,12 +629,18 @@ void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
           scope->Var(eltwise_y_in_node->Name())->GetMutable<LoDTensor>();
 
       // Initialize eltwise_y
-      TensorCopy(*eltwise_y_in_tensor, platform::CPUPlace(),
-                 eltwise_y_in_tensor_ex);
+      TensorCopy(
+          *eltwise_y_in_tensor, platform::CPUPlace(), eltwise_y_in_tensor_ex);
 
-      recompute_bias_and_weights(scope, conv_weight, *bn_scale, *bn_bias_tensor,
-                                 *bn_mean, *bn_variance, eltwise_y_in_tensor_ex,
-                                 epsilon, conv_type());
+      recompute_bias_and_weights(scope,
+                                 conv_weight,
+                                 *bn_scale,
+                                 *bn_bias_tensor,
+                                 *bn_mean,
+                                 *bn_variance,
+                                 eltwise_y_in_tensor_ex,
+                                 epsilon,
+                                 conv_type());
       // Set new var
       eltwise->Op()->RenameInput(eltwise_y_in->Name(),
                                  eltwise_y_in_node->Name());
@@ -341,19 +655,36 @@ void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
                          }),
           eltwise_y_in->outputs.end());
     } else {
-      recompute_bias_and_weights(scope, conv_weight, *bn_scale, *bn_bias_tensor,
-                                 *bn_mean, *bn_variance, eltwise_y_in_tensor,
-                                 epsilon, conv_type());
+      recompute_bias_and_weights(scope,
+                                 conv_weight,
+                                 *bn_scale,
+                                 *bn_bias_tensor,
+                                 *bn_mean,
+                                 *bn_variance,
+                                 eltwise_y_in_tensor,
+                                 epsilon,
+                                 conv_type());
     }
 
     // Update the elementwise_add node
     eltwise->Op()->SetAttr("axis", 1);
     eltwise->Op()->SetOutput("Out", std::vector<std::string>({bn_out->Name()}));
-
-    GraphSafeRemoveNodes(
-        graph,
-        {bn_scale, bn_bias, bn_mean, bn_variance, batch_norm, bn_mean_out,
-         bn_variance_out, bn_saved_mean, bn_saved_variance, eltwise_out});
+    if (!IsCompat(*eltwise->Op())) {
+      LOG(WARNING)
+          << "conv_eltwise_bn fuse pass in out eltwise op compat failed.";
+      return;
+    }
+    GraphSafeRemoveNodes(graph,
+                         {bn_scale,
+                          bn_bias,
+                          bn_mean,
+                          bn_variance,
+                          batch_norm,
+                          bn_mean_out,
+                          bn_variance_out,
+                          bn_saved_mean,
+                          bn_saved_variance,
+                          eltwise_out});
 
     IR_NODE_LINK_TO(eltwise, bn_out);
 
@@ -363,6 +694,134 @@ void ConvEltwiseAddBNFusePass::ApplyImpl(ir::Graph* graph) const {
   gpd(graph, handler);
 
   AddStatis(found_conv_bn_count);
+}
+
+ConvTransposeBNFusePass::ConvTransposeBNFusePass() {
+  AddOpCompat(OpCompat("conv2d_transpose"))
+      .AddInput("Input")
+      .IsTensor()
+      .End()
+      .AddInput("Filter")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddOutput("Output")
+      .IsTensor()
+      .End()
+      .AddAttr("output_padding")
+      .IsType<std::vector<int>>()
+      .IsOptional()
+      .End()
+      .AddAttr("output_size")
+      .IsType<std::vector<int>>()
+      .IsOptional()
+      .End()
+      .AddAttr("groups")
+      .IsNumEQ(1)
+      .End()
+      .AddAttr("dilations")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("strides")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("paddings")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("padding_algorithm")
+      .IsOptional()
+      .IsStringIn({"EXPLICIT", "SAME", "VALID"})
+      .End()
+      .AddAttr("data_format")
+      .IsStringIn({"NCHW", "AnyLayout"})
+      .End();
+}
+
+ConvTransposeEltwiseAddBNFusePass::ConvTransposeEltwiseAddBNFusePass() {
+  AddOpCompat(OpCompat("conv2d_transpose"))
+      .AddInput("Input")
+      .IsTensor()
+      .End()
+      .AddInput("Filter")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddOutput("Output")
+      .IsTensor()
+      .End()
+      .AddAttr("output_padding")
+      .IsType<std::vector<int>>()
+      .IsOptional()
+      .End()
+      .AddAttr("output_size")
+      .IsType<std::vector<int>>()
+      .IsOptional()
+      .End()
+      .AddAttr("groups")
+      .IsNumEQ(1)
+      .End()
+      .AddAttr("dilations")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("strides")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("paddings")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("padding_algorithm")
+      .IsOptional()
+      .IsStringIn({"EXPLICIT", "SAME", "VALID"})
+      .End()
+      .AddAttr("data_format")
+      .IsStringIn({"NCHW", "AnyLayout"})
+      .End();
+}
+
+DepthwiseConvBNFusePass::DepthwiseConvBNFusePass() {
+  AddOpCompat(OpCompat("depthwise_conv2d"))
+      .AddInput("Input")
+      .IsTensor()
+      .End()
+      .AddInput("Filter")
+      .IsTensor()
+      .End()
+      .AddInput("Bias")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddInput("ResidualData")
+      .IsTensor()
+      .IsOptional()
+      .End()
+      .AddOutput("Output")
+      .IsTensor()
+      .End()
+      .AddAttr("strides")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("paddings")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("padding_algorithm")
+      .IsOptional()
+      .IsStringIn({"EXPLICIT", "SAME", "VALID"})
+      .End()
+      .AddAttr("groups")
+      .IsNumGE(1)
+      .End()
+      .AddAttr("dilations")
+      .IsType<std::vector<int>>()
+      .End()
+      .AddAttr("data_format")
+      .IsStringIn({"NCHW", "NHWC", "AnyLayout"})
+      .End();
 }
 
 }  // namespace ir
@@ -389,5 +848,16 @@ REGISTER_PASS_CAPABILITY(conv_eltwiseadd_bn_fuse_pass)
     .AddCombination(
         paddle::framework::compatible::OpVersionComparatorCombination()
             .LE("conv2d", 1)
-            .EQ("elementwise_add", 0)
+            .LE("elementwise_add", 1)
+            .EQ("batch_norm", 0));
+REGISTER_PASS_CAPABILITY(conv_transpose_eltwiseadd_bn_fuse_pass)
+    .AddCombination(
+        paddle::framework::compatible::OpVersionComparatorCombination()
+            .LE("conv2d_transpose", 2)
+            .LE("elementwise_add", 1)
+            .EQ("batch_norm", 0));
+REGISTER_PASS_CAPABILITY(conv_transpose_bn_fuse_pass)
+    .AddCombination(
+        paddle::framework::compatible::OpVersionComparatorCombination()
+            .LE("conv2d_transpose", 2)
             .EQ("batch_norm", 0));

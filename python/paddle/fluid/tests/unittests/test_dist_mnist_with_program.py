@@ -21,12 +21,13 @@ paddle.enable_static()
 
 
 class TestDistMnistLocalSGDFleetApi(TestDistBase):
+
     def _setup_config(self):
         self._sync_mode = True
         self._use_reduce = False
         self._use_reader_alloc = False
         self._nccl2_mode = True
-        self._gpu_fleet_api = True
+        self._use_fleet_api = True
         self._use_local_sgd = True
 
     def test_dist_train(self):
@@ -36,12 +37,13 @@ class TestDistMnistLocalSGDFleetApi(TestDistBase):
 
 
 class TestDistMnistGradAllReduceFleetApi(TestDistBase):
+
     def _setup_config(self):
         self._sync_mode = True
         self._use_reduce = False
         self._use_reader_alloc = False
         self._nccl2_mode = True
-        self._gpu_fleet_api = True
+        self._use_fleet_api = True
         self._ut4grad_allreduce = True
 
     def test_dist_train(self):

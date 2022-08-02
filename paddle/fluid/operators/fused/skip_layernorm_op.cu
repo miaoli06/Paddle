@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cuda_runtime.h>
 #include <paddle/fluid/platform/device_context.h>
+
 #include <algorithm>
+
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/memory/malloc.h"
 #include "paddle/fluid/operators/math/bert_encoder_functor.h"
-#include "paddle/fluid/operators/math/blas.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
 
 namespace paddle {
 namespace operators {
@@ -52,8 +53,15 @@ class SkipLayerNormKernel : public framework::OpKernel<T> {
     auto &device_ctx = context.template device_context<DeviceContext>();
     operators::math::SkipLayerNormFunctor<T> skip_layer_norm_func;
 
-    skip_layer_norm_func(num, hidden, X_d, Y_d, scale_d, bias_d, output_d,
-                         epsilon, device_ctx.stream());
+    skip_layer_norm_func(num,
+                         hidden,
+                         X_d,
+                         Y_d,
+                         scale_d,
+                         bias_d,
+                         output_d,
+                         epsilon,
+                         device_ctx.stream());
   }
 };
 
@@ -61,6 +69,5 @@ class SkipLayerNormKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OP_CUDA_KERNEL(
-    skip_layernorm,
-    ops::SkipLayerNormKernel<paddle::platform::CUDADeviceContext, float>);
+REGISTER_OP_CUDA_KERNEL(skip_layernorm,
+                        ops::SkipLayerNormKernel<phi::GPUContext, float>);

@@ -36,24 +36,24 @@ TEST(Event, CpuElapsedTime) {
 
 TEST(RecordEvent, RecordEvent) {
   using paddle::platform::Event;
+  using paddle::platform::EventRole;
+  using paddle::platform::EventSortingKey;
   using paddle::platform::EventType;
-  using paddle::platform::RecordEvent;
-  using paddle::platform::PushEvent;
   using paddle::platform::PopEvent;
   using paddle::platform::ProfilerState;
-  using paddle::platform::EventSortingKey;
-  using paddle::platform::EventRole;
+  using paddle::platform::PushEvent;
+  using paddle::platform::RecordEvent;
 
   ProfilerState state = ProfilerState::kCPU;
   EnableProfiler(state);
 
   /* Usage 1:
-  *  PushEvent(evt_name);
-  *  ...
-  *  code to be analyzed
-  *  ...
-  * PopEvent(evt_name);
-  */
+   *  PushEvent(evt_name);
+   *  ...
+   *  code to be analyzed
+   *  ...
+   * PopEvent(evt_name);
+   */
   LOG(INFO) << "Usage 1: PushEvent & PopEvent";
   for (int loop = 0; loop < 3; ++loop) {
     for (int i = 1; i < 5; ++i) {
@@ -122,7 +122,7 @@ TEST(RecordEvent, RecordEvent) {
       if (events[i][j].name() == "_start_profiler_") ++start_profiler_count;
       if (events[i][j].name() == "push") {
         EXPECT_EQ(events[i][j + 1].name(), "pop");
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
         EXPECT_GT(events[i][j].CudaElapsedMs(events[i][j + 1]), 0);
 #else
         EXPECT_GT(events[i][j].CpuElapsedMs(events[i][j + 1]), 0);
@@ -144,5 +144,15 @@ TEST(TMP, stream_wait) {
   cudaStreamSynchronize(stream);
   cudaStreamSynchronize(stream);
   cudaStreamSynchronize(stream);
+}
+#endif
+
+#ifdef PADDLE_WITH_HIP
+TEST(TMP, stream_wait) {
+  hipStream_t stream;
+  hipStreamCreate(&stream);
+  hipStreamSynchronize(stream);
+  hipStreamSynchronize(stream);
+  hipStreamSynchronize(stream);
 }
 #endif

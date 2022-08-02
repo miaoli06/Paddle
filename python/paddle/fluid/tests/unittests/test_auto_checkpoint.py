@@ -36,6 +36,7 @@ logger = get_logger()
 
 
 class AutoCheckPointACLBase(AutoCheckpointBase):
+
     def setUp(self):
         get_logger()
         logger.info("enter tests")
@@ -203,6 +204,7 @@ class AutoCheckPointACLBase(AutoCheckpointBase):
 
 
 class AutoCheckpointTest(AutoCheckPointACLBase):
+
     def setUp(self):
         get_logger()
         logger.info("enter tests")
@@ -268,7 +270,7 @@ class AutoCheckpointTest(AutoCheckPointACLBase):
     def test_checker(self):
         os.environ.pop("PADDLE_JOB_ID", None)
         try:
-            checker = AutoCheckpointChecker()
+            checker = acp.AutoCheckpointChecker()
             self.assertFalse(True)
         except Exception as e:
             pass

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "paddle/fluid/framework/details/op_handle_base.h"
+#include "paddle/fluid/framework/details/scope_buffered_ssa_graph_executor.h"
 #include "paddle/fluid/framework/details/var_handle.h"
 #include "paddle/fluid/framework/ir/graph.h"
 #include "paddle/fluid/framework/ir/pass.h"
@@ -55,13 +56,14 @@ constexpr char kPlaces[] = "places";
 constexpr char kGlobalScope[] = "global_scope";
 constexpr char kLocalScopes[] = "local_scopes";
 constexpr char kNCCLCtxs[] = "nccl_ctxs";
+constexpr char kBKCLCtxs[] = "bkcl_ctxs";
 constexpr char kUseHierarchicalAllReduce[] = "use_hierarchical_allreduce";
 
 // aux variables to represent dependency. Useful to resolve data hazard.
 typedef std::unordered_set<VarHandleBase *> GraphDepVars;
 constexpr char kGraphDepVars[] = "dep_vars";
 
-typedef std::unordered_set<std::string> FusedVars;
+typedef std::unordered_map<std::string, details::VariableInfo> FusedVars;
 constexpr char kFusedVars[] = "fused_vars";
 constexpr char kFusedVarNamePrefix[] = "@FUSEDVAR@";
 
@@ -75,9 +77,6 @@ typedef std::vector<std::pair<std::string, std::string>> ParamsAndGrads;
 constexpr char kParamsAndDenseGrads[] = "params_and_dense_grads";
 constexpr char kParamsAndSparseGrads[] = "params_and_sparse_grads";
 
-typedef std::vector<ProgramDesc> ProgramDescs;
-constexpr char kProgramDescs[] = "program_descs";
-
 typedef std::unordered_set<std::string> PinnedVars;
 constexpr char kPinnedVars[] = "pinned_vars";
 
@@ -89,7 +88,7 @@ inline bool IsOpRole(const OpDesc &op, OpRole role) {
   const auto &attrs = op.GetAttrMap();
   auto iter = attrs.find(OpProtoAndCheckerMaker::OpRoleAttrName());
   if (iter == attrs.end()) return false;
-  return static_cast<bool>(BOOST_GET_CONST(int, iter->second) &
+  return static_cast<bool>(PADDLE_GET_CONST(int, iter->second) &
                            static_cast<int>(role));
 }
 
@@ -97,13 +96,15 @@ inline std::vector<std::string> GetOpRoleVarsOrEmpty(const OpDesc &op) {
   const auto &attrs = op.GetAttrMap();
   auto iter = attrs.find(OpProtoAndCheckerMaker::OpRoleVarAttrName());
   if (iter == attrs.end()) return {};
-  auto &ret = BOOST_GET_CONST(std::vector<std::string>, iter->second);
+  auto &ret = PADDLE_GET_CONST(std::vector<std::string>, iter->second);
   PADDLE_ENFORCE_EQ(
-      ret.size() % 2, 0,
+      ret.size() % 2,
+      0,
       platform::errors::InvalidArgument(
           "The size of attribute %s must be an even number, but got %d",
-          OpProtoAndCheckerMaker::OpRoleVarAttrName(), ret.size()));
-  return BOOST_GET_CONST(std::vector<std::string>, iter->second);
+          OpProtoAndCheckerMaker::OpRoleVarAttrName(),
+          ret.size()));
+  return PADDLE_GET_CONST(std::vector<std::string>, iter->second);
 }
 
 bool IsDataParallelInferenceGraph(const ir::Graph &graph);
@@ -116,7 +117,8 @@ bool HasDropLastReadOp(const ir::Graph &graph);
 bool HasKeepLastReadOp(const ir::Graph &graph);
 
 template <typename T>
-void CopyGraphAttrIfExists(const ir::Graph &src, ir::Graph *dst,
+void CopyGraphAttrIfExists(const ir::Graph &src,
+                           ir::Graph *dst,
                            const std::string &name) {
   if (src.Has(name)) {
     auto &attr = src.Get<T>(name);

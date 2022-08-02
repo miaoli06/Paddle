@@ -32,7 +32,7 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
         platform::errors::InvalidArgument("Input(CVM)'s rank should be 2."));
     PADDLE_ENFORCE_EQ(cvm_dims[1], 2UL, platform::errors::InvalidArgument(
                                             "The 2nd dimension of "
-                                            "Input(CVM) should be 2."));
+                                          "Input(CVM) should be 2."));
 
     auto ins_dims = ctx->GetInputsDim("X");
     const int cvm_offset = ctx->Attrs().Get<int>("cvm_offset");
@@ -48,7 +48,7 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
       const int quant_ratio = ctx->Attrs().Get<int>("quant_ratio");
       PADDLE_ENFORCE_GT(
           quant_ratio, 0,
-          platform::errors::InvalidArgument(
+                      platform::errors::InvalidArgument(
               "Input need filter quant_ratio should be greater than 0"));
     }
 
@@ -72,8 +72,8 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
       if (use_cvm) {
         PADDLE_ENFORCE_GT(
             dims[rank - 1], 2,
-            "Shape error in %lu id, the last dimension(embedding) of the "
-            "'X' tensor must be larger than 2.",
+                "Shape error in %lu id, the last dimension(embedding) of the "
+                "'X' tensor must be larger than 2.",
             i);
       }
       // input lod is not accessible here
@@ -82,7 +82,7 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
         if (clk_filter) {
           out_dim = {-1, dims[rank - 1] - 1};
         } else {
-          out_dim = {-1, dims[rank - 1]};
+        out_dim = {-1, dims[rank - 1]};
         }
       } else {
         out_dim = {-1, dims[rank - 1] - cvm_offset - embed_thres_size};
@@ -97,7 +97,7 @@ class FusedSeqpoolCVMOp : public framework::OperatorWithKernel {
       const framework::ExecutionContext& ctx) const override {
     return framework::OpKernelType(framework::proto::VarType::FP32,
                                    ctx.device_context());
-  }
+      }
 };
 
 class FusedSeqpoolCVMOpMaker : public framework::OpProtoAndCheckerMaker {

@@ -13,9 +13,9 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/op_call_stack.h"
+
 #include <string>
-#include <vector>
-#include "paddle/fluid/framework/attribute.h"
+
 #include "paddle/fluid/framework/op_proto_maker.h"
 
 namespace paddle {
@@ -33,7 +33,8 @@ std::string InsertIndentationIntoEachLine(const std::string &str) {
   return sout.str();
 }
 
-void InsertCallStackInfo(const std::string &type, const AttributeMap &attrs,
+void InsertCallStackInfo(const std::string &type,
+                         const AttributeMap &attrs,
                          platform::EnforceNotMet *exception) {
   if (attrs.count("sub_block") != 0) {
     return;
@@ -42,7 +43,7 @@ void InsertCallStackInfo(const std::string &type, const AttributeMap &attrs,
   const std::vector<std::string> *callstack = nullptr;
   auto iter = attrs.find(OpProtoAndCheckerMaker::OpCreationCallstackAttrName());
   if (iter != attrs.end()) {
-    callstack = &BOOST_GET_CONST(std::vector<std::string>, iter->second);
+    callstack = &PADDLE_GET_CONST(std::vector<std::string>, iter->second);
     if (callstack->empty()) callstack = nullptr;
   }
 

@@ -28,13 +28,15 @@ import sys
 from feed_data_reader import FeedDataReader
 
 __all__ = ['TestParallelExecutorBase']
+DeviceType = core.DeviceType
 
 
 class TestParallelExecutorBase(unittest.TestCase):
+
     @classmethod
     def check_network_convergence(cls,
                                   method,
-                                  use_cuda=True,
+                                  use_device=DeviceType.CUDA,
                                   iter=5,
                                   batch_size=None,
                                   feed_dict=None,
@@ -42,7 +44,7 @@ class TestParallelExecutorBase(unittest.TestCase):
                                   get_data_from_feeder=None,
                                   use_parallel_executor=True,
                                   use_reduce=False,
-                                  use_ir_memory_optimize=True,
+                                  use_ir_memory_optimize=False,
                                   enable_inplace=True,
                                   fuse_elewise_add_act_ops=False,
                                   fuse_all_optimizer_ops=False,
@@ -51,6 +53,7 @@ class TestParallelExecutorBase(unittest.TestCase):
                                   optimizer=fluid.optimizer.Adam,
                                   use_fast_executor=False,
                                   enable_sequential_execution=False):
+
         def run_executor(exe, binary, feed, fetch_list):
             if feed_data_reader is None:
                 res = exe.run(binary, feed=feed, fetch_list=fetch_list)
@@ -65,8 +68,8 @@ class TestParallelExecutorBase(unittest.TestCase):
                 feed_data_reader, FeedDataReader
             ), "feed_data_reader must be type of FeedDataReader"
 
-        paddle.seed(1)
-        paddle.framework.random._manual_program_seed(1)
+        paddle.seed(0)
+        paddle.framework.random._manual_program_seed(0)
         main = fluid.Program()
         startup = fluid.Program()
 
@@ -74,7 +77,9 @@ class TestParallelExecutorBase(unittest.TestCase):
             feed_dict, loss = cls.build_model(feed_dict, get_data_from_feeder,
                                               main, method, optimizer)
 
-        place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
+        place = fluid.CUDAPlace(
+            0) if use_device == DeviceType.CUDA else fluid.XPUPlace(
+                0) if use_device == DeviceType.XPU else fluid.CPUPlace()
         exe = fluid.Executor(place)
         exe.run(startup)
 
@@ -82,7 +87,7 @@ class TestParallelExecutorBase(unittest.TestCase):
             enable_inplace, enable_sequential_execution, fuse_all_optimizer_ops,
             fuse_all_reduce_ops, fuse_elewise_add_act_ops,
             fuse_relu_depthwise_conv, use_fast_executor, use_ir_memory_optimize,
-            use_reduce, use_cuda)
+            use_reduce, use_device)
 
         if use_parallel_executor:
             binary = compiler.CompiledProgram(main).with_data_parallel(
@@ -94,21 +99,33 @@ class TestParallelExecutorBase(unittest.TestCase):
 
         if batch_size is not None:
             batch_size *= fluid.core.get_cuda_device_count(
-            ) if use_cuda else int(
+            ) if use_device == DeviceType.CUDA else fluid.core.get_xpu_device_count(
+            ) if use_device == DeviceType.XPU else int(
                 os.environ.get('CPU_NUM', multiprocessing.cpu_count()))
 
+        area_below_loss = 0
         begin = time.time()
-        first_loss, = run_executor(
-            exe=exe, binary=binary, feed=feed_dict, fetch_list=[loss.name])
+        first_loss, = run_executor(exe=exe,
+                                   binary=binary,
+                                   feed=feed_dict,
+                                   fetch_list=[loss.name])
+        area_below_loss += 0.5 * first_loss.mean()
         for _ in range(iter):
-            run_executor(exe=exe, binary=binary, feed=feed_dict, fetch_list=[])
-        last_loss, = run_executor(
-            exe=exe, binary=binary, feed=feed_dict, fetch_list=[loss.name])
+            mid_loss = run_executor(exe=exe,
+                                    binary=binary,
+                                    feed=feed_dict,
+                                    fetch_list=[loss.name])
+            area_below_loss += mid_loss[0].mean()
+        last_loss, = run_executor(exe=exe,
+                                  binary=binary,
+                                  feed=feed_dict,
+                                  fetch_list=[loss.name])
+        area_below_loss += 0.5 * last_loss.mean()
         end = time.time()
 
         if batch_size is not None:
-            print("%.4f Instance per second" % (
-                (batch_size * iter + 2) / (end - begin)))
+            print("%.4f Instance per second" % ((batch_size * iter + 2) /
+                                                (end - begin)))
 
         avg_last_loss_val = np.array(last_loss).mean()
         avg_first_loss_val = np.array(first_loss).mean()
@@ -116,14 +133,14 @@ class TestParallelExecutorBase(unittest.TestCase):
                 float(avg_first_loss_val)):
             sys.exit("got NaN loss, training failed.")
 
-        print(first_loss, last_loss)
+        print(first_loss, last_loss, area_below_loss)
         # self.assertGreater(first_loss[0], last_loss[0])
-        return first_loss, last_loss
+        return first_loss, last_loss, area_below_loss
 
     @classmethod
     def check_pass_conflict(cls,
                             method,
-                            use_cuda=True,
+                            use_device=DeviceType.CUDA,
                             feed_dict=None,
                             get_data_from_feeder=None,
                             use_reduce=False,
@@ -143,7 +160,9 @@ class TestParallelExecutorBase(unittest.TestCase):
             feed_dict, loss = cls.build_model(feed_dict, get_data_from_feeder,
                                               main, method, optimizer)
 
-        place = fluid.CUDAPlace(0) if use_cuda else fluid.CPUPlace()
+        place = fluid.CUDAPlace(
+            0) if use_device == DeviceType.CUDA else fluid.XPUPlace(
+                0) if use_device == DeviceType.XPU else fluid.CPUPlace()
         exe = fluid.Executor(place)
         exe.run(startup)
 
@@ -151,7 +170,7 @@ class TestParallelExecutorBase(unittest.TestCase):
             enable_inplace, enable_sequential_execution, fuse_all_optimizer_ops,
             fuse_all_reduce_ops, fuse_elewise_add_act_ops,
             fuse_relu_depthwise_conv, use_fast_executor, use_ir_memory_optimize,
-            use_reduce, use_cuda)
+            use_reduce, use_device)
 
         binary = compiler.CompiledProgram(main).with_data_parallel(
             loss_name=loss.name,
@@ -165,7 +184,7 @@ class TestParallelExecutorBase(unittest.TestCase):
                      fuse_all_optimizer_ops, fuse_all_reduce_ops,
                      fuse_elewise_add_act_ops, fuse_relu_depthwise_conv,
                      use_fast_executor, use_ir_memory_optimize, use_reduce,
-                     use_cuda):
+                     use_device):
         exec_strategy = fluid.ExecutionStrategy()
         if use_fast_executor:
             exec_strategy.use_experimental_executor = True
@@ -180,8 +199,16 @@ class TestParallelExecutorBase(unittest.TestCase):
         build_strategy.enable_inplace = enable_inplace
         build_strategy.enable_sequential_execution = enable_sequential_execution
 
-        if use_cuda and core.is_compiled_with_cuda():
+        if use_device == DeviceType.CUDA and core.is_compiled_with_cuda():
             build_strategy.remove_unnecessary_lock = True
+        if use_device == DeviceType.XPU and core.is_compiled_with_xpu():
+            build_strategy.fuse_elewise_add_act_ops = False
+            build_strategy.fuse_relu_depthwise_conv = False
+            build_strategy.fuse_all_optimizer_ops = False
+            build_strategy.memory_optimize = False
+            build_strategy.enable_inplace = False
+            build_strategy.enable_sequential_execution = False
+
         return build_strategy, exec_strategy
 
     @classmethod

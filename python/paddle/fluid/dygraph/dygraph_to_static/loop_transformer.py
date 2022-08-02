@@ -15,7 +15,7 @@
 from __future__ import print_function
 
 import copy
-import gast
+from paddle.utils import gast
 
 from collections import defaultdict
 from paddle.fluid import unique_name
@@ -25,9 +25,14 @@ from paddle.fluid.dygraph.dygraph_to_static.static_analysis import StaticAnalysi
 from paddle.fluid.dygraph.dygraph_to_static.utils import ast_to_source_code
 from paddle.fluid.dygraph.dygraph_to_static.utils import generate_name_node
 from paddle.fluid.dygraph.dygraph_to_static.utils import get_attribute_full_name
-from paddle.fluid.dygraph.dygraph_to_static.utils import ForNodeVisitor
-from paddle.fluid.dygraph.dygraph_to_static.utils import RenameTransformer
-from paddle.fluid.dygraph.dygraph_to_static.variable_trans_func import create_static_variable_gast_node
+from paddle.fluid.dygraph.dygraph_to_static.variable_trans_func import create_undefined_var
+from paddle.fluid.dygraph.dygraph_to_static.utils import create_nonlocal_stmt_nodes, create_get_args_node, create_set_args_node
+from paddle.fluid.dygraph.dygraph_to_static.utils import FunctionNameLivenessAnalysis
+from paddle.fluid.dygraph.dygraph_to_static.ifelse_transformer import ARGS_NAME
+from paddle.fluid.dygraph.dygraph_to_static.base_transformer import BaseTransformer
+from paddle.fluid.dygraph.dygraph_to_static.base_transformer import RenameTransformer
+from paddle.fluid.dygraph.dygraph_to_static.base_transformer import ForLoopTuplePreTransformer
+from paddle.fluid.dygraph.dygraph_to_static.base_transformer import ForNodeVisitor
 
 __all__ = ['LoopTransformer', 'NameVisitor']
 
@@ -36,25 +41,56 @@ WHILE_BODY_PREFIX = 'while_body'
 
 FOR_CONDITION_PREFIX = 'for_loop_condition'
 FOR_BODY_PREFIX = 'for_loop_body'
-GENERATE_VARIABLE_PREFIX = 'generate_variable'
 
 
-def create_while_node(condition_name, body_name, loop_var_names):
+def create_while_nodes(condition_name, body_name, loop_var_names, getter_name,
+                       setter_name):
+    """
+    Returns a list of gast.Node which represents the calling of Paddle
+    controlflow while_loop.
+
+    Usually, the list just contain 1 statement such as:
+
+    [a, b, c] = paddle.jit.dy2static.convert_while_loop(
+            condition_name, body_name, [a, b, c])
+
+    where a, b, c are in loop_var_names.
+
+    However, if loop_var_names contains property such as foo.x, we cannot
+    assign the property as output of convert_while_loop because Python
+    property is a kind of read-only attribute. To handle the case, we replace
+    the attributes which are output of convert_while_loop with generated
+    variables, then if we know the attribute is not read-only at runtime, we
+    assign the attribute. The created statements are like:
+
+    [a, b, __attribute_variable_1] = paddle.jit.dy2static.convert_while_loop(
+            condition_name, body_name, [a, b, foo.x])
+    if not isinstance(getattr(type(foo), x, None), property): foo.x = __attribute_variable_1
+
+    The number of above statements is not only 1, that's why the return type is
+    a list of gast.Node.
+    """
     # NOTE(liym27):
     # It's better to parse the source code into an AST node than to customize an AST node
     # including child nodes, because it is easy to mistake the ast node type when customizing the node.
     #
     # For example: loop_var_names = [a, b, foo.x], the type of `a` or `b` is gast.Name,
     # but the type of `foo.x` gast.Attribute.
+    # We have to make loop_var_names and assign_loop_var_names with same order
+    # set doesn't have order so we convert it to list
+    loop_var_names = list(loop_var_names)
+    assign_loop_var_names = []
+    for name in (loop_var_names):
+        assign_loop_var_names.append(name)
 
-    while_func_name = "paddle.jit.dy2static.convert_while_loop"
-    while_node_str = "[{}] = {}({}, {}, [{}])".format(
-        ",".join(loop_var_names), while_func_name, condition_name, body_name,
-        ",".join(loop_var_names))
-
+    while_func_name = "_jst.While"
+    while_node_str = "{}({}, {}, {}, {})".format(while_func_name,
+                                                 condition_name, body_name,
+                                                 getter_name, setter_name)
     while_node = gast.parse(while_node_str).body[0]
 
-    return while_node
+    ret = [while_node]
+    return ret
 
 
 class NameVisitor(gast.NodeVisitor):
@@ -71,7 +107,6 @@ class NameVisitor(gast.NodeVisitor):
 
         # List of nodes that have scope of variables.
         self.nodes_with_scope = []
-
         self.blacklist_names = {"False", "True", "None"}
 
         # Mapping from gast.While/gast.For to variable nodes
@@ -139,9 +174,7 @@ class NameVisitor(gast.NodeVisitor):
                 # If this var is a basic variable and read-only and not
                 # condition var, it may not be loop_var else it should
                 # be in loop_var as input
-                if (not name in condition_names) and (
-                        not name in write_names
-                ) and self._node_var_type_is_basic(name_to_type[name]):
+                if (not name in condition_names) and (not name in write_names):
                     continue
                 loop_var_names.add(name)
 
@@ -167,7 +200,13 @@ class NameVisitor(gast.NodeVisitor):
                 #       var_a = func2(x)
                 #
 
-                if isinstance(var_name_to_ctxs[name][0], gast.Load):
+                is_created = False
+                for ctx in var_name_to_ctxs[name]:
+                    if isinstance(ctx, gast.Store):
+                        is_created = True
+
+                if isinstance(var_name_to_ctxs[name][0],
+                              gast.Load) and is_created:
                     loop_var_names.add(name)
                     create_var_names.add(name)
 
@@ -183,8 +222,11 @@ class NameVisitor(gast.NodeVisitor):
 
         self.current_seen_vars.add(node)
         write_context = {
-            type(gast.Store()), type(gast.AugStore()), type(gast.Del())
+            type(gast.Store()),
+            type(gast.AugStore()),
+            type(gast.Del())
         }
+
         for loop_node in self.current_loop:
             self.in_loop_vars[loop_node].append(node)
             if type(node.ctx) in write_context:
@@ -196,6 +238,7 @@ class NameVisitor(gast.NodeVisitor):
     def visit_FunctionDef(self, node):
         self.nodes_with_scope.append(node)
         self.blacklist_names.add(node.name)
+
         # The variables in the function are not visible to the outside scope.
         before_func_seen_vars = copy.copy(self.current_seen_vars)
 
@@ -294,6 +337,9 @@ class NameVisitor(gast.NodeVisitor):
             return True
         return False
 
+    def _is_global_or_nonlocal(self, node):
+        return False
+
     def _is_ancestor_node(self, ancestor_node, node):
         parent_node = self._get_parent_node(node)
 
@@ -320,6 +366,21 @@ class NameVisitor(gast.NodeVisitor):
         :param loop_vars: before_loop_vars, after_loop_vars or in_loop_vars of loop_node.
         :param loop_node: Current loop node.
         """
+
+        def filter_name_nodes_from(root_node, target_var_names):
+            """
+            Filter children with gast.Name type from node.(inclusivly)
+            """
+            name_nodes = set()
+            if isinstance(root_node, gast.Name):
+                if node.id in target_var_names:
+                    name_nodes.add(root_node)
+            for child_node in gast.walk(root_node):
+                if isinstance(child_node, gast.Name):
+                    if child_node.id in target_var_names:
+                        name_nodes.add(child_node)
+
+            return name_nodes
 
         vars_of_list_generator = set()
         target_vars_of_for_node = set()
@@ -355,15 +416,16 @@ class NameVisitor(gast.NodeVisitor):
 
                 # 1.2 vars from target vars used in elt_node
                 target_var_names = {var.id for var in target_vars}
-                listcomp_node = self._get_parent_node(parent_node)
-                elt_node = listcomp_node.elt
-                if isinstance(elt_node, gast.Name):
-                    if elt_node.id in target_var_names:
-                        vars_of_list_generator.add(elt_node)
-                for child_node in gast.walk(elt_node):
-                    if isinstance(child_node, gast.Name):
-                        if child_node.id in target_var_names:
-                            vars_of_list_generator.add(child_node)
+                comp_node = self._get_parent_node(parent_node)
+                elt_nodes = []
+                if isinstance(comp_node, gast.ListComp):
+                    elt_nodes.append(comp_node.elt)
+                elif isinstance(comp_node, gast.DictComp):
+                    elt_nodes.extend([comp_node.key, comp_node.value])
+
+                for node in elt_nodes:
+                    vars_of_list_generator |= filter_name_nodes_from(
+                        node, target_var_names)
 
             # 2. Get target vars or vars from target vars used in for-loop but the for-loop is
             #   1) not the "loop_node" itself
@@ -410,7 +472,7 @@ class NameVisitor(gast.NodeVisitor):
         return loop_vars - removed_vars
 
 
-class LoopTransformer(gast.NodeTransformer):
+class LoopTransformer(BaseTransformer):
     """
     This class transforms python while/for statement into Static Graph Ast
     """
@@ -421,19 +483,21 @@ class LoopTransformer(gast.NodeTransformer):
         ), "Input non-AstNodeWrapper node for the initialization of LoopTransformer."
         self.wrapper_root = wrapper_root
         self.root = wrapper_root.node
-        self.name_visitor = NameVisitor(self.root)
+        FunctionNameLivenessAnalysis(self.root)
 
     def transform(self):
+        ForLoopTuplePreTransformer(self.wrapper_root).transform()
         self.visit(self.root)
 
-    def visit(self, node):
+    def visit_While(self, node):
         self.generic_visit(node)
-        # All parent nodes that may contain gast.While/gast.For
-        if hasattr(node, 'body'):
-            self.replace_stmt_list(node.body)
-        if hasattr(node, 'orelse'):
-            self.replace_stmt_list(node.orelse)
-        return node
+        new_stmts = self.get_while_stmt_nodes(node)
+        return new_stmts
+
+    def visit_For(self, node):
+        self.generic_visit(node)
+        new_stmts = self.get_for_stmt_nodes(node)
+        return new_stmts
 
     def replace_stmt_list(self, body_list):
         if not isinstance(body_list, list):
@@ -472,21 +536,20 @@ class LoopTransformer(gast.NodeTransformer):
         if stmts_tuple is None:
             return [node]
         init_stmts, cond_stmt, body_stmts = stmts_tuple
-
         # 2. get original loop vars
-        loop_var_names, create_var_names = self.name_visitor.get_loop_var_names(
-            node)
+        loop_var_names, create_var_names = node.pd_scope.modified_vars(
+        ), node.pd_scope.created_vars()
+        # TODO: Remove the bunch of code?  We have the unique format `for A in B:`
         # NOTE: in 'for x in var' or 'for i, x in enumerate(var)' cases,
         # we need append new loop var & remove useless loop var
         #   1. for x in var -> x is no need
         #   2. for i, x in enumerate(var) -> x is no need
-        if current_for_node_parser.is_for_iter(
-        ) or current_for_node_parser.is_for_enumerate_iter():
+        if current_for_node_parser.is_for_iter():
             iter_var_name = current_for_node_parser.iter_var_name
             iter_idx_name = current_for_node_parser.iter_idx_name
             loop_var_names.add(iter_idx_name)
-            if iter_var_name not in create_var_names:
-                loop_var_names.remove(iter_var_name)
+            if current_for_node_parser.enum_idx_name is not None:
+                loop_var_names.add(current_for_node_parser.enum_idx_name)
 
         # 3. prepare result statement list
         new_stmts = []
@@ -496,10 +559,17 @@ class LoopTransformer(gast.NodeTransformer):
         #     y += x
         # print(x) # x = 10
         #
-        # We need to create static variable for those variables
-        for name in create_var_names:
-            if "." not in name:
-                new_stmts.append(create_static_variable_gast_node(name))
+        # We don't need to create static variable for them, because
+        # we do this in CreateUndefinedVarTransformer
+
+        # create non-local statement for body and cond.
+        nonlocal_names = list(loop_var_names | create_var_names)
+        nonlocal_names.sort()
+        # TODO(dev): Need a better way to deal this.
+        if ARGS_NAME in nonlocal_names:
+            nonlocal_names.remove(ARGS_NAME)
+
+        nonlocal_stmt_node = create_nonlocal_stmt_nodes(nonlocal_names)
 
         # 4. append init statements
         new_stmts.extend(init_stmts)
@@ -507,74 +577,62 @@ class LoopTransformer(gast.NodeTransformer):
         # 5. create & append condition function node
         condition_func_node = gast.FunctionDef(
             name=unique_name.generate(FOR_CONDITION_PREFIX),
-            args=gast.arguments(
-                args=[
-                    gast.Name(
-                        id=name,
-                        ctx=gast.Param(),
-                        annotation=None,
-                        type_comment=None) for name in loop_var_names
-                ],
-                posonlyargs=[],
-                vararg=None,
-                kwonlyargs=[],
-                kw_defaults=None,
-                kwarg=None,
-                defaults=[]),
-            body=[gast.Return(value=cond_stmt)],
+            args=gast.arguments(args=[],
+                                posonlyargs=[],
+                                vararg=None,
+                                kwonlyargs=[],
+                                kw_defaults=None,
+                                kwarg=None,
+                                defaults=[]),
+            body=nonlocal_stmt_node + [gast.Return(value=cond_stmt)],
             decorator_list=[],
             returns=None,
             type_comment=None)
-        for name in loop_var_names:
-            if "." in name:
-                rename_transformer = RenameTransformer(condition_func_node)
-                rename_transformer.rename(
-                    name, unique_name.generate(GENERATE_VARIABLE_PREFIX))
         new_stmts.append(condition_func_node)
 
         # 6. create & append loop body function node
         # append return values for loop body
-        body_stmts.append(
-            gast.Return(value=generate_name_node(
-                loop_var_names, ctx=gast.Load())))
         body_func_node = gast.FunctionDef(
             name=unique_name.generate(FOR_BODY_PREFIX),
-            args=gast.arguments(
-                args=[
-                    gast.Name(
-                        id=name,
-                        ctx=gast.Param(),
-                        annotation=None,
-                        type_comment=None) for name in loop_var_names
-                ],
-                posonlyargs=[],
-                vararg=None,
-                kwonlyargs=[],
-                kw_defaults=None,
-                kwarg=None,
-                defaults=[]),
-            body=body_stmts,
+            args=gast.arguments(args=[],
+                                posonlyargs=[],
+                                vararg=None,
+                                kwonlyargs=[],
+                                kw_defaults=None,
+                                kwarg=None,
+                                defaults=[]),
+            body=nonlocal_stmt_node + body_stmts,
             decorator_list=[],
             returns=None,
             type_comment=None)
-        for name in loop_var_names:
-            if "." in name:
-                rename_transformer = RenameTransformer(body_func_node)
-                rename_transformer.rename(
-                    name, unique_name.generate(GENERATE_VARIABLE_PREFIX))
         new_stmts.append(body_func_node)
 
+        get_args_node = create_get_args_node(nonlocal_names)
+        set_args_node = create_set_args_node(nonlocal_names)
         # 7. create & append while loop node
-        while_loop_node = create_while_node(condition_func_node.name,
-                                            body_func_node.name, loop_var_names)
-        new_stmts.append(while_loop_node)
+        while_loop_nodes = create_while_nodes(condition_func_node.name,
+                                              body_func_node.name,
+                                              nonlocal_names,
+                                              get_args_node.name,
+                                              set_args_node.name)
+        new_stmts.extend([get_args_node, set_args_node])
+        new_stmts.extend(while_loop_nodes)
 
         return new_stmts
 
     def get_while_stmt_nodes(self, node):
-        loop_var_names, create_var_names = self.name_visitor.get_loop_var_names(
-            node)
+        loop_var_names, create_var_names = node.pd_scope.modified_vars(
+        ), node.pd_scope.created_vars()
         new_stmts = []
+
+        # create non-local statement for body and cond.
+        nonlocal_names = list(loop_var_names | create_var_names)
+        nonlocal_names.sort()
+        # TODO(dev): Need a better way to deal this.
+        if ARGS_NAME in nonlocal_names:
+            nonlocal_names.remove(ARGS_NAME)
+
+        nonlocal_stmt_node = create_nonlocal_stmt_nodes(nonlocal_names)
 
         # Python can create variable in loop and use it out of loop, E.g.
         #
@@ -583,71 +641,48 @@ class LoopTransformer(gast.NodeTransformer):
         #     y = x
         # z = y
         #
-        # We need to create static variable for those variables
-        for name in create_var_names:
-            if "." not in name:
-                new_stmts.append(create_static_variable_gast_node(name))
+        # We don't need to create static variable for those variables, because
+        # we do this in CreateUndefinedVarTransformer
 
         condition_func_node = gast.FunctionDef(
             name=unique_name.generate(WHILE_CONDITION_PREFIX),
-            args=gast.arguments(
-                args=[
-                    gast.Name(
-                        id=name,
-                        ctx=gast.Param(),
-                        annotation=None,
-                        type_comment=None) for name in loop_var_names
-                ],
-                posonlyargs=[],
-                vararg=None,
-                kwonlyargs=[],
-                kw_defaults=None,
-                kwarg=None,
-                defaults=[]),
-            body=[gast.Return(value=node.test)],
+            args=gast.arguments(args=[],
+                                posonlyargs=[],
+                                vararg=None,
+                                kwonlyargs=[],
+                                kw_defaults=None,
+                                kwarg=None,
+                                defaults=[]),
+            body=nonlocal_stmt_node + [gast.Return(value=node.test)],
             decorator_list=[],
             returns=None,
             type_comment=None)
 
-        for name in loop_var_names:
-            if "." in name:
-                rename_transformer = RenameTransformer(condition_func_node)
-                rename_transformer.rename(
-                    name, unique_name.generate(GENERATE_VARIABLE_PREFIX))
         new_stmts.append(condition_func_node)
 
         new_body = node.body
-        new_body.append(
-            gast.Return(value=generate_name_node(
-                loop_var_names, ctx=gast.Load())))
         body_func_node = gast.FunctionDef(
             name=unique_name.generate(WHILE_BODY_PREFIX),
-            args=gast.arguments(
-                args=[
-                    gast.Name(
-                        id=name,
-                        ctx=gast.Param(),
-                        annotation=None,
-                        type_comment=None) for name in loop_var_names
-                ],
-                posonlyargs=[],
-                vararg=None,
-                kwonlyargs=[],
-                kw_defaults=None,
-                kwarg=None,
-                defaults=[]),
-            body=new_body,
+            args=gast.arguments(args=[],
+                                posonlyargs=[],
+                                vararg=None,
+                                kwonlyargs=[],
+                                kw_defaults=None,
+                                kwarg=None,
+                                defaults=[]),
+            body=nonlocal_stmt_node + new_body,
             decorator_list=[],
             returns=None,
             type_comment=None)
-        for name in loop_var_names:
-            if "." in name:
-                rename_transformer = RenameTransformer(body_func_node)
-                rename_transformer.rename(
-                    name, unique_name.generate(GENERATE_VARIABLE_PREFIX))
         new_stmts.append(body_func_node)
+        get_args_node = create_get_args_node(nonlocal_names)
+        set_args_node = create_set_args_node(nonlocal_names)
 
-        while_loop_node = create_while_node(condition_func_node.name,
-                                            body_func_node.name, loop_var_names)
-        new_stmts.append(while_loop_node)
+        while_loop_nodes = create_while_nodes(condition_func_node.name,
+                                              body_func_node.name,
+                                              nonlocal_names,
+                                              get_args_node.name,
+                                              set_args_node.name)
+        new_stmts.extend([get_args_node, set_args_node])
+        new_stmts.extend(while_loop_nodes)
         return new_stmts

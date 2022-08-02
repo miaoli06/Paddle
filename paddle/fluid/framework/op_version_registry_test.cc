@@ -12,9 +12,9 @@
    See the License for the specific language governing permissions and
    limitations under the License. */
 
-#include <gtest/gtest.h>
-
 #include "paddle/fluid/framework/op_version_registry.h"
+
+#include <gtest/gtest.h>
 
 namespace paddle {
 namespace framework {
@@ -31,8 +31,8 @@ TEST(test_operator_version, test_operator_version) {
         Upgrade reshape, modified one attribute [axis] and add a new attribute [size].
       )ROC",
           framework::compatible::OpVersionDesc()
-              .ModifyAttr("axis",
-                          "Increased from the original one method to two.", -1)
+              .ModifyAttr(
+                  "axis", "Increased from the original one method to two.", -1)
               .NewAttr("size",
                        "In order to represent a two-dimensional rectangle, the "
                        "parameter size is added.",
@@ -53,6 +53,19 @@ TEST(test_operator_version, test_operator_version) {
           framework::compatible::OpVersionDesc()
               .NewInput("X2", "The second input.")
               .NewOutput("Y2", "The second output."));
+
+  REGISTER_OP_VERSION(op_name_0__)
+      .AddCheckpoint(
+          R"ROC(
+        Incompatible upgrade of attribute [height], input [X2] and output [Y2]
+      )ROC",
+          framework::compatible::OpVersionDesc()
+              .DeleteAttr("height",
+                          "Parameters deleted due to interface alignment.")
+              .ModifyInput("X2", "Modify input due to interface alignment.")
+              .ModifyOutput("Y2", "Modify output due to interface alignment.")
+              .DeleteInput("X2", "Delete input due to interface alignment.")
+              .DeleteOutput("Y2", "Delete output due to interface alignment."));
 }
 
 TEST(test_pass_op_version_checker, test_pass_op_version_checker) {

@@ -13,19 +13,24 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/ir/fusion_group/fusion_group_pass.h"
-#include <memory>
-#include <utility>
-#include <vector>
+
 #include "paddle/fluid/framework/ir/fusion_group/code_generator.h"
 #include "paddle/fluid/framework/ir/fusion_group/elementwise_group_detector.h"
 #include "paddle/fluid/framework/ir/graph_pattern_detector.h"
 #include "paddle/fluid/framework/ir/pass_tester_helper.h"
 #include "paddle/fluid/framework/op_proto_maker.h"
 #include "paddle/fluid/platform/device_code.h"
+namespace paddle {
+namespace platform {
+class DeviceCodePool;
+}  // namespace platform
+}  // namespace paddle
 
 namespace paddle {
 namespace framework {
 namespace ir {
+
+class Node;
 
 void FusionGroupPass::ApplyImpl(ir::Graph* graph) const {
   FusePassBase::Init("fusion_group_pass", graph);
@@ -59,7 +64,9 @@ int FusionGroupPass::DetectFusionGroup(Graph* graph, int type) const {
   bool save_intermediate_out = false;
   for (auto& vec : subgraphs) {
     fusion_group::SubGraph subgraph(
-        type, "", save_intermediate_out,
+        type,
+        "",
+        save_intermediate_out,
         std::unordered_set<Node*>(vec.begin(), vec.end()));
     VLOG(3) << "subgraph: {\n" << DebugString(subgraph.SortedNodes()) << "}\n";
 
@@ -97,7 +104,7 @@ static int ExtractOpRole(fusion_group::SubGraph* subgraph) {
   for (auto* n : subgraph->Nodes()) {
     if (n && n->IsOp() && n->Op()) {
       if (n->Op()->HasAttr(attr_name)) {
-        op_roles.insert(BOOST_GET_CONST(int, n->Op()->GetAttr(attr_name)));
+        op_roles.insert(PADDLE_GET_CONST(int, n->Op()->GetAttr(attr_name)));
       }
     }
   }

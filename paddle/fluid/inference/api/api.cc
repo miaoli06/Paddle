@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <sstream>
+
 #include "gflags/gflags.h"
 #include "paddle/fluid/framework/commit.h"
 #include "paddle/fluid/framework/lod_tensor.h"
@@ -107,7 +108,8 @@ void PaddleBuf::Reset(void *data, size_t length) {
 void PaddleBuf::Free() {
   if (memory_owned_ && data_) {
     PADDLE_ENFORCE_GT(
-        length_, 0UL,
+        length_,
+        0UL,
         platform::errors::PreconditionNotMet(
             "The memory used in PaddleBuf %d should be greater than 0",
             length_));
@@ -136,14 +138,25 @@ std::string UpdateDllFlag(const char *name, const char *value) {
   LOG(WARNING)
       << "The function \"UpdateDllFlag\" is only used to update the flag "
          "on the Windows shared library";
-  ret = google::SetCommandLineOption(name, value);
+  ret = ::GFLAGS_NAMESPACE::SetCommandLineOption(name, value);
 
   PADDLE_ENFORCE_EQ(
-      ret.empty(), false,
+      ret.empty(),
+      false,
       platform::errors::InvalidArgument(
           "Fail to update flag: %s, please make sure the flag exists.", name));
   LOG(INFO) << ret;
   return ret;
 }
 
+#ifdef PADDLE_WITH_CRYPTO
+std::shared_ptr<framework::Cipher> MakeCipher(const std::string &config_file) {
+  return framework::CipherFactory::CreateCipher(config_file);
+}
+#endif
+
 }  // namespace paddle
+
+#ifdef PADDLE_WITH_CUSTOM_DEVICE
+#include "paddle/phi/capi/capi.h"
+#endif

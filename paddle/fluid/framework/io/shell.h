@@ -15,6 +15,7 @@
 #pragma once
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -33,8 +34,8 @@
 #include <utility>
 #include <vector>
 
-#include "paddle/fluid/platform/port.h"
 #include "paddle/fluid/string/string_helper.h"
+#include "paddle/phi/backends/dynload/port.h"
 
 #if defined(__arm__) || defined(__aarch64__) || defined(__ARM_NEON) || \
     defined(__ARM_NEON__)
@@ -57,7 +58,8 @@ extern std::shared_ptr<FILE> shell_fopen(const std::string& path,
                                          const std::string& mode);
 
 std::shared_ptr<FILE> shell_popen(const std::string& cmd,
-                                  const std::string& mode, int* err_no,
+                                  const std::string& mode,
+                                  int* err_no,
                                   int* status = NULL,
                                   bool redirect_stderr = false);
 

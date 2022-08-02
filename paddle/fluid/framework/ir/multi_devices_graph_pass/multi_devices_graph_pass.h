@@ -39,9 +39,14 @@ class Graph;
 
 namespace paddle {
 namespace platform {
-class NCCLContextMap;
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 class NCCLCommunicator;
-}
+class NCCLContextMap;
+#elif defined(PADDLE_WITH_XPU_BKCL)
+class BKCLContextMap;
+class BKCLCommunicator;
+#endif
+}  // namespace platform
 
 namespace framework {
 class Scope;
@@ -61,7 +66,9 @@ class MultiDevSSAGraphBuilderBase : public ir::Pass {
 
   virtual std::vector<ir::Node *> SortOperations(const ir::Graph &graph) const;
 
-  virtual void InsertCollectiveOp(ir::Graph *result, const std::string &p_name,
+  virtual void InsertCollectiveOp(ir::Graph *result,
+                                  ir::Node *node,
+                                  const std::string &p_name,
                                   const std::string &g_name) const = 0;
 
   virtual bool DealWithSpecialOp(ir::Graph *result, ir::Node *node) const;
@@ -75,26 +82,33 @@ class MultiDevSSAGraphBuilderBase : public ir::Pass {
 
   bool IsScaleLossOp(ir::Node *node) const;
 
-  void CreateComputationalOps(ir::Graph *result, ir::Node *node,
+  void CreateComputationalOps(ir::Graph *result,
+                              ir::Node *node,
                               size_t num_places) const;
 
   void CreateScaleLossGradOp(ir::Graph *result,
                              const std::string &loss_grad_name,
-                             ir::Node *out_var_node, size_t loss_scale,
+                             ir::Node *out_var_node,
+                             size_t loss_scale,
                              proto::VarType::Type dtype) const;
 
-  details::VarHandle *CreateReduceOp(ir::Graph *result, const std::string &og,
+  details::VarHandle *CreateReduceOp(ir::Graph *result,
+                                     const std::string &og,
                                      size_t dst_dev_id) const;
 
-  void CreateComputationalOp(ir::Graph *result, ir::Node *node,
+  void CreateComputationalOp(ir::Graph *result,
+                             ir::Node *node,
                              size_t dev_id) const;
 
   bool IsSparseGradient(const std::string &og) const;
 
-  void CreateAllReduceOp(ir::Graph *result, const std::string &og,
+  void CreateAllReduceOp(ir::Graph *result,
+                         ir::Node *node,
+                         const std::string &og,
                          bool is_encoded = false) const;
 
-  void CreateBroadcastOp(ir::Graph *result, const std::string &p_name,
+  void CreateBroadcastOp(ir::Graph *result,
+                         const std::string &p_name,
                          size_t src_dev_id) const;
 
   void InsertScaleLossGradOp(ir::Graph *result, const ir::Node *node) const;
@@ -106,14 +120,18 @@ class MultiDevSSAGraphBuilderBase : public ir::Pass {
   void SetCommunicationContext(details::OpHandleBase *op_handle,
                                const platform::Place &p) const;
 
-  void CreateOpHandleIOs(ir::Graph *result, ir::Node *node,
+  void CreateOpHandleIOs(ir::Graph *result,
+                         ir::Node *node,
                          size_t device_id) const;
 
   void CreateIsolatedVarNode(ir::Graph *result, ir::Node *var_node) const;
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   mutable platform::NCCLContextMap *nccl_ctxs_{nullptr};
   mutable platform::NCCLCommunicator *multi_nccl_ctxs_{nullptr};
+#elif defined(PADDLE_WITH_XPU_BKCL)
+  mutable platform::BKCLContextMap *bkcl_ctxs_{nullptr};
+  mutable platform::BKCLCommunicator *multi_bkcl_ctxs_{nullptr};
 #endif
 
   mutable std::string loss_var_name_;
@@ -126,7 +144,9 @@ class MultiDevSSAGraphBuilderBase : public ir::Pass {
 
 class AllReduceSSAGraphBuilder : public MultiDevSSAGraphBuilderBase {
  protected:
-  virtual void InsertCollectiveOp(ir::Graph *result, const std::string &p_name,
+  virtual void InsertCollectiveOp(ir::Graph *result,
+                                  ir::Node *node,
+                                  const std::string &p_name,
                                   const std::string &g_name) const;
 
   virtual void InsertPostprocessOps(ir::Graph *result) const {}
@@ -134,9 +154,21 @@ class AllReduceSSAGraphBuilder : public MultiDevSSAGraphBuilderBase {
   bool IsEncoded(const std::string &p_name) const;
 };
 
+class NoReduceSSAGraphBuilder : public MultiDevSSAGraphBuilderBase {
+ protected:
+  void InsertCollectiveOp(ir::Graph *result,
+                          ir::Node *node,
+                          const std::string &p_name,
+                          const std::string &g_name) const override {}
+
+  void InsertPostprocessOps(ir::Graph *result) const override {}
+};
+
 class AsyncSSAGraphBuilder : public MultiDevSSAGraphBuilderBase {
  protected:
-  void InsertCollectiveOp(ir::Graph *result, const std::string &p_name,
+  void InsertCollectiveOp(ir::Graph *result,
+                          ir::Node *node,
+                          const std::string &p_name,
                           const std::string &g_name) const override {}
 
   bool NeedCollectiveForGrad(const std::string &grad_name,
@@ -175,7 +207,9 @@ class ReduceSSAGraphBuilder : public BalanceVarSSAGraphBuilder {
  protected:
   virtual void Init() const;
 
-  virtual void InsertCollectiveOp(ir::Graph *result, const std::string &p_name,
+  virtual void InsertCollectiveOp(ir::Graph *result,
+                                  ir::Node *node,
+                                  const std::string &p_name,
                                   const std::string &g_name) const;
 
   virtual bool DealWithSpecialOp(ir::Graph *result, ir::Node *node) const;
@@ -204,7 +238,9 @@ class DistSSAGraphBuilder : public BalanceVarSSAGraphBuilder {
 
   virtual void InsertPostprocessOps(ir::Graph *result) const;
 
-  virtual void InsertCollectiveOp(ir::Graph *result, const std::string &p_name,
+  virtual void InsertCollectiveOp(ir::Graph *result,
+                                  ir::Node *node,
+                                  const std::string &p_name,
                                   const std::string &g_name) const;
 
   virtual void ResetState() const;

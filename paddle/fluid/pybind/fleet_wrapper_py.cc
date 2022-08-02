@@ -33,7 +33,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/inference/io.h"
 #include "paddle/fluid/platform/place.h"
-#include "paddle/fluid/platform/variant.h"
+
 #include "paddle/fluid/pybind/fleet_wrapper_py.h"
 
 namespace py = pybind11;
@@ -41,22 +41,28 @@ namespace py = pybind11;
 namespace paddle {
 namespace pybind {
 void BindFleetWrapper(py::module* m) {
-  py::class_<framework::FleetWrapper>(*m, "Fleet")
-      .def(py::init())
+  py::class_<framework::FleetWrapper, std::shared_ptr<framework::FleetWrapper>>(
+      *m, "Fleet")
+      .def(py::init([]() { return framework::FleetWrapper::GetInstance(); }))
       .def("push_dense", &framework::FleetWrapper::PushDenseVarsSync)
       .def("pull_dense", &framework::FleetWrapper::PullDenseVarsSync)
       .def("init_server", &framework::FleetWrapper::InitServer)
-      .def("run_server", (uint64_t (framework::FleetWrapper::*)(void)) &
-                             framework::FleetWrapper::RunServer)
-      .def("run_server", (uint64_t (framework::FleetWrapper::*)(  // NOLINT
-                             const std::string&, uint32_t)) &     // NOLINT
-                             framework::FleetWrapper::RunServer)
+      .def("run_server",
+           (uint64_t(framework::FleetWrapper::*)(void)) &
+               framework::FleetWrapper::RunServer)
+      .def("run_server",
+           (uint64_t(framework::FleetWrapper::*)(  // NOLINT
+               const std::string&,
+               uint32_t)) &  // NOLINT
+               framework::FleetWrapper::RunServer)
       .def("init_worker", &framework::FleetWrapper::InitWorker)
       .def("init_model", &framework::FleetWrapper::PushDenseParamSync)
       .def("save_model", &framework::FleetWrapper::SaveModel)
       .def("get_cache_threshold", &framework::FleetWrapper::GetCacheThreshold)
       .def("cache_shuffle", &framework::FleetWrapper::CacheShuffle)
       .def("save_cache", &framework::FleetWrapper::SaveCache)
+      .def("save_multi_table_one_path",
+           &framework::FleetWrapper::SaveMultiTableOnePath)
       .def("save_model_with_whitelist",
            &framework::FleetWrapper::SaveWithWhitelist)
       .def("load_model", &framework::FleetWrapper::LoadModel)
@@ -74,6 +80,8 @@ void BindFleetWrapper(py::module* m) {
       .def("shrink_sparse_table", &framework::FleetWrapper::ShrinkSparseTable)
       .def("shrink_dense_table", &framework::FleetWrapper::ShrinkDenseTable)
       .def("print_table_stat", &framework::FleetWrapper::PrintTableStat)
+      .def("set_file_num_one_shard",
+           &framework::FleetWrapper::SetFileNumOneShard)
       .def("client_flush", &framework::FleetWrapper::ClientFlush)
       .def("load_from_paddle_model",
            &framework::FleetWrapper::LoadFromPaddleModel)
@@ -87,6 +95,7 @@ void BindFleetWrapper(py::module* m) {
       .def("save_model_one_table", &framework::FleetWrapper::SaveModelOneTable)
       .def("save_model_one_table_with_prefix",
            &framework::FleetWrapper::SaveModelOneTablePrefix)
+      .def("set_date", &framework::FleetWrapper::SetDate)
       .def("copy_table", &framework::FleetWrapper::CopyTable)
       .def("copy_table_by_feasign",
            &framework::FleetWrapper::CopyTableByFeasign);

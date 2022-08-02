@@ -17,7 +17,7 @@ from __future__ import print_function
 import unittest
 import numpy as np
 from op_test import OpTest
-from test_lstm_op import lstm, ACTIVATION
+from paddle.fluid.tests.unittests.test_lstm_op import lstm, ACTIVATION
 
 
 def fc(x, w, b):
@@ -38,12 +38,12 @@ def fusion_lstm(
         act_gate=None,
         act_cell=None,
         act_cand=None):
-    return lstm(
-        fc(x, wx, bx), lod, h0, c0, w_h, w_b, w_c, is_reverse, act_gate,
-        act_cell, act_cand)
+    return lstm(fc(x, wx, bx), lod, h0, c0, w_h, w_b, w_c, is_reverse, act_gate,
+                act_cell, act_cand)
 
 
 class TestFusionLSTMOp(OpTest):
+
     def set_conf(self):
         pass
 
@@ -58,6 +58,7 @@ class TestFusionLSTMOp(OpTest):
         self.act_gate = 'sigmoid'
         self.act_cell = 'tanh'
         self.act_cand = 'tanh'
+        self.use_mkldnn = False
         self.set_conf()
 
         T = sum(self.lod[0])
@@ -110,7 +111,8 @@ class TestFusionLSTMOp(OpTest):
             'is_reverse': self.is_reverse,
             'gate_activation': self.act_gate,
             'cell_activation': self.act_cell,
-            'candidate_activation': self.act_cand
+            'candidate_activation': self.act_cand,
+            'use_mkldnn': self.use_mkldnn
         }
 
     def test_check_output(self):
@@ -120,63 +122,74 @@ class TestFusionLSTMOp(OpTest):
 
 
 class TestFusionLSTMOpInit(TestFusionLSTMOp):
+
     def set_conf(self):
         self.has_initial_state = True
 
 
 class TestFusionLSTMOpReverse(TestFusionLSTMOp):
+
     def set_conf(self):
         self.is_reverse = True
 
 
 class TestFusionLSTMOpInitReverse(TestFusionLSTMOp):
+
     def set_conf(self):
         self.has_initial_state = True
         self.is_reverse = True
 
 
 class TestFusionLSTMOpMD1(TestFusionLSTMOp):
+
     def set_conf(self):
         self.M = 36
         self.D = 8
 
 
 class TestFusionLSTMOpMD2(TestFusionLSTMOp):
+
     def set_conf(self):
         self.M = 8
         self.D = 8
 
 
 class TestFusionLSTMOpMD3(TestFusionLSTMOp):
+
     def set_conf(self):
         self.M = 15
         self.D = 3
 
 
 class TestFusionLSTMOpBS1(TestFusionLSTMOp):
+
     def set_conf(self):
         self.lod = [[3]]
         self.D = 16
 
 
 class TestFusionLSTMOpPeepholes(TestFusionLSTMOp):
+
     def set_conf(self):
         self.use_peepholes = True
 
 
 class TestFusionLSTMOpPeepholesInit(TestFusionLSTMOp):
+
     def set_conf(self):
         self.use_peepholes = True
         self.has_initial_state = True
 
 
 class TestFusionLSTMOpPeepholesReverse(TestFusionLSTMOp):
+
     def set_conf(self):
         self.use_peepholes = True
         self.is_reverse = True
 
 
 class TestFusionLSTMOpPeepholesInitReverse(TestFusionLSTMOp):
+
     def set_conf(self):
         self.use_peepholes = True
         self.has_initial_state = True
@@ -184,6 +197,7 @@ class TestFusionLSTMOpPeepholesInitReverse(TestFusionLSTMOp):
 
 
 class TestFusionLSTMOpPeepholesBS1(TestFusionLSTMOp):
+
     def set_conf(self):
         self.use_peepholes = True
         self.lod = [[2]]
@@ -191,4 +205,6 @@ class TestFusionLSTMOpPeepholesBS1(TestFusionLSTMOp):
 
 
 if __name__ == '__main__':
+    from paddle import enable_static
+    enable_static()
     unittest.main()

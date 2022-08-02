@@ -14,11 +14,7 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/math/vol2col.h"
 
-namespace paddle {
-namespace platform {
-class CPUDeviceContext;
-}  // namespace platform
-}  // namespace paddle
+#include "paddle/phi/backends/cpu/cpu_context.h"
 
 namespace paddle {
 namespace operators {
@@ -31,20 +27,23 @@ namespace math {
  *                    output_depth, output_height, output_width]
  */
 template <class T>
-class Vol2ColFunctor<platform::CPUDeviceContext, T> {
+class Vol2ColFunctor<phi::CPUContext, T> {
  public:
-  void operator()(const platform::CPUDeviceContext& context,
+  void operator()(const phi::CPUContext& context,
                   const framework::Tensor& vol,
                   const std::vector<int>& dilations,
                   const std::vector<int>& strides,
-                  const std::vector<int>& paddings, framework::Tensor* col,
+                  const std::vector<int>& paddings,
+                  framework::Tensor* col,
                   const DataLayout data_layout) const {
-    PADDLE_ENFORCE_EQ(vol.dims().size(), 4,
+    PADDLE_ENFORCE_EQ(vol.dims().size(),
+                      4,
                       platform::errors::InvalidArgument(
                           "The dimension of vol should be 4, but received %d.",
                           vol.dims().size()));
 
-    PADDLE_ENFORCE_EQ(col->dims().size(), 7,
+    PADDLE_ENFORCE_EQ(col->dims().size(),
+                      7,
                       platform::errors::InvalidArgument(
                           "The dimension of col should be 7, but received %d.",
                           col->dims().size()));
@@ -80,28 +79,34 @@ class Vol2ColFunctor<platform::CPUDeviceContext, T> {
                                strides[0] +
                            1;
     PADDLE_ENFORCE_EQ(
-        input_depth_tmp, output_depth,
+        input_depth_tmp,
+        output_depth,
         platform::errors::InvalidArgument(
             "input_depth(%d) and output_depth(%d) are mismatching.",
-            input_depth_tmp, output_depth));
+            input_depth_tmp,
+            output_depth));
     auto input_height_tmp = (input_height + pad_h_up + pad_h_down -
                              ((dilations[1] * (filter_height - 1) + 1))) /
                                 strides[1] +
                             1;
     PADDLE_ENFORCE_EQ(
-        input_height_tmp, output_height,
+        input_height_tmp,
+        output_height,
         platform::errors::InvalidArgument(
             "input_height(%d) and output_height(%d) are mismatching.",
-            input_height_tmp, output_height));
+            input_height_tmp,
+            output_height));
     auto input_width_tmp = (input_width + pad_w_left + pad_w_right -
                             ((dilations[2] * (filter_width - 1) + 1))) /
                                strides[2] +
                            1;
     PADDLE_ENFORCE_EQ(
-        input_width_tmp, output_width,
+        input_width_tmp,
+        output_width,
         platform::errors::InvalidArgument(
             "input_width(%d) and output_width(%d) are mismatching.",
-            input_width_tmp, output_width));
+            input_width_tmp,
+            output_width));
     const T* vol_data = vol.data<T>();
     T* col_data = col->data<T>();
 
@@ -148,20 +153,23 @@ class Vol2ColFunctor<platform::CPUDeviceContext, T> {
  *                    output_depth, output_height, output_width]
  */
 template <class T>
-class Col2VolFunctor<platform::CPUDeviceContext, T> {
+class Col2VolFunctor<phi::CPUContext, T> {
  public:
-  void operator()(const platform::CPUDeviceContext& context,
+  void operator()(const phi::CPUContext& context,
                   const framework::Tensor& col,
                   const std::vector<int>& dilations,
                   const std::vector<int>& strides,
-                  const std::vector<int>& paddings, framework::Tensor* vol,
+                  const std::vector<int>& paddings,
+                  framework::Tensor* vol,
                   const DataLayout data_layout) const {
-    PADDLE_ENFORCE_EQ(vol->dims().size(), 4,
+    PADDLE_ENFORCE_EQ(vol->dims().size(),
+                      4,
                       platform::errors::InvalidArgument(
                           "The dimension of vol should be 4, but received %d.",
                           vol->dims().size()));
 
-    PADDLE_ENFORCE_EQ(col.dims().size(), 7,
+    PADDLE_ENFORCE_EQ(col.dims().size(),
+                      7,
                       platform::errors::InvalidArgument(
                           "The dimension of col  should be 7, but received %d.",
                           col.dims().size()));
@@ -196,28 +204,34 @@ class Col2VolFunctor<platform::CPUDeviceContext, T> {
                                strides[0] +
                            1;
     PADDLE_ENFORCE_EQ(
-        input_depth_tmp, output_depth,
+        input_depth_tmp,
+        output_depth,
         platform::errors::InvalidArgument(
             "input_depth(%d) and output_depth(%d) are mismatching.",
-            input_depth_tmp, output_depth));
+            input_depth_tmp,
+            output_depth));
     auto input_height_tmp = (input_height + pad_h_up + pad_h_down -
                              ((dilations[1] * (filter_height - 1) + 1))) /
                                 strides[1] +
                             1;
     PADDLE_ENFORCE_EQ(
-        input_height_tmp, output_height,
+        input_height_tmp,
+        output_height,
         platform::errors::InvalidArgument(
             "input_height(%d) and output_height(%d) are mismatching.",
-            input_height_tmp, output_height));
+            input_height_tmp,
+            output_height));
     auto input_width_tmp = (input_width + pad_w_left + pad_w_right -
                             ((dilations[2] * (filter_width - 1) + 1))) /
                                strides[2] +
                            1;
     PADDLE_ENFORCE_EQ(
-        input_width_tmp, output_width,
+        input_width_tmp,
+        output_width,
         platform::errors::InvalidArgument(
             "input_width(%d)  and output_width(%d) are mismatching.",
-            input_width_tmp, output_width));
+            input_width_tmp,
+            output_width));
     T* vol_data = vol->data<T>();
     const T* col_data = col.data<T>();
 
@@ -258,10 +272,11 @@ class Col2VolFunctor<platform::CPUDeviceContext, T> {
   }
 };
 
-template class Vol2ColFunctor<platform::CPUDeviceContext, float>;
-template class Vol2ColFunctor<platform::CPUDeviceContext, double>;
-template class Col2VolFunctor<platform::CPUDeviceContext, float>;
-template class Col2VolFunctor<platform::CPUDeviceContext, double>;
+template class Vol2ColFunctor<phi::CPUContext, float>;
+template class Vol2ColFunctor<phi::CPUContext, double>;
+
+template class Col2VolFunctor<phi::CPUContext, float>;
+template class Col2VolFunctor<phi::CPUContext, double>;
 
 }  // namespace math
 }  // namespace operators

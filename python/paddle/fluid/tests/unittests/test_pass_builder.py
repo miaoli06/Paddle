@@ -23,9 +23,11 @@ import unittest
 import os
 import sys
 import math
+import tempfile
 
 
 class TestPassBuilder(unittest.TestCase):
+
     def check_network_convergence(self, use_cuda, build_strategy=None):
         os.environ['CPU_NUM'] = str(4)
         main = fluid.Program()
@@ -71,10 +73,9 @@ class TestPassBuilder(unittest.TestCase):
                     sys.exit("got NaN loss, training failed.")
 
                 self.assertTrue(
-                    np.allclose(
-                        train_loss, test_loss, atol=1e-8),
-                    "Train loss: " + str(train_loss) + "\n Test loss:" +
-                    str(test_loss))
+                    np.allclose(train_loss, test_loss,
+                                atol=1e-8), "Train loss: " + str(train_loss) +
+                    "\n Test loss:" + str(test_loss))
 
     def test_parallel_testing_with_new_strategy(self):
         build_strategy = fluid.BuildStrategy()
@@ -92,21 +93,23 @@ class TestPassBuilder(unittest.TestCase):
         viz_pass = pass_builder.append_pass("graph_viz_pass")
         self.assertEqual(origin_len + 1, len(pass_builder.all_passes()))
 
-        pass_builder.insert_pass(
-            len(pass_builder.all_passes()), "graph_viz_pass")
+        pass_builder.insert_pass(len(pass_builder.all_passes()),
+                                 "graph_viz_pass")
         self.assertEqual(origin_len + 2, len(pass_builder.all_passes()))
 
         pass_builder.remove_pass(len(pass_builder.all_passes()) - 1)
         self.assertEqual(origin_len + 1, len(pass_builder.all_passes()))
-        viz_pass.set("graph_viz_path", "/tmp/test_viz_pass")
+        with tempfile.TemporaryDirectory(prefix="dot_path_") as tmpdir:
+            graph_viz_path = os.path.join(tmpdir, 'test_viz_pass.dot')
+            viz_pass.set("graph_viz_path", graph_viz_path)
 
-        self.check_network_convergence(
-            use_cuda=core.is_compiled_with_cuda(),
-            build_strategy=build_strategy)
-        try:
-            os.stat("/tmp/test_viz_pass")
-        except os.error:
-            self.assertFalse(True)
+            self.check_network_convergence(
+                use_cuda=core.is_compiled_with_cuda(),
+                build_strategy=build_strategy)
+            try:
+                os.stat(graph_viz_path)
+            except os.error:
+                self.assertFalse(True)
 
 
 if __name__ == '__main__':

@@ -12,9 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include "paddle/fluid/operators/beam_search_decode_op.h"
+
 #include <string>
 
-#include "paddle/fluid/operators/beam_search_decode_op.h"
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/platform/device_context.h"
 
 namespace paddle {
@@ -36,8 +38,10 @@ namespace operators {
 struct BeamSearchDecodeFunctor {
   BeamSearchDecodeFunctor(const LoDTensorArray& step_ids,
                           const LoDTensorArray& step_scores,
-                          LoDTensor* id_tensor, LoDTensor* score_tensor,
-                          size_t beam_size, int end_id)
+                          LoDTensor* id_tensor,
+                          LoDTensor* score_tensor,
+                          size_t beam_size,
+                          int end_id)
       : beam_size_(beam_size),
         end_id_(end_id),
         step_ids_origin_(step_ids),
@@ -45,9 +49,15 @@ struct BeamSearchDecodeFunctor {
         id_tensor_(id_tensor),
         score_tensor_(score_tensor) {
     tensor_on_gpu_ = false;
+    tensor_on_npu_ = false;
     // First make a copy of GPU data on CPU
-    if (platform::is_gpu_place(step_ids_origin_[0].place())) {
-      tensor_on_gpu_ = true;
+    if (platform::is_gpu_place(step_ids_origin_[0].place()) ||
+        platform::is_npu_place(step_ids_origin_[0].place())) {
+      if (platform::is_gpu_place(step_ids_origin_[0].place())) {
+        tensor_on_gpu_ = true;
+      } else {
+        tensor_on_npu_ = true;
+      }
       platform::DeviceContextPool& pool =
           platform::DeviceContextPool::Instance();
       auto* dev_ctx = pool.Get(step_ids_origin_[0].place());
@@ -55,7 +65,9 @@ struct BeamSearchDecodeFunctor {
       for (auto& step_id : step_ids_origin_) {
         framework::LoDTensor out;
         if (step_id.numel() > 0) {
-          dev_ctx->Wait();
+          if (tensor_on_gpu_) {
+            dev_ctx->Wait();
+          }
           framework::TensorCopy(step_id, platform::CPUPlace(), *dev_ctx, &out);
           dev_ctx->Wait();
         }
@@ -64,8 +76,13 @@ struct BeamSearchDecodeFunctor {
         step_ids_.push_back(out);
       }
     }
-    if (platform::is_gpu_place(step_scores_origin_[0].place())) {
-      tensor_on_gpu_ = true;
+    if (platform::is_gpu_place(step_scores_origin_[0].place()) ||
+        platform::is_npu_place(step_scores_origin_[0].place())) {
+      if (platform::is_gpu_place(step_scores_origin_[0].place())) {
+        tensor_on_gpu_ = true;
+      } else {
+        tensor_on_npu_ = true;
+      }
       platform::DeviceContextPool& pool =
           platform::DeviceContextPool::Instance();
       auto* dev_ctx = pool.Get(step_scores_origin_[0].place());
@@ -73,9 +90,11 @@ struct BeamSearchDecodeFunctor {
       for (auto& step_score : step_scores_origin_) {
         framework::LoDTensor out;
         if (step_score.numel() > 0) {
-          dev_ctx->Wait();
-          framework::TensorCopy(step_score, platform::CPUPlace(), *dev_ctx,
-                                &out);
+          if (tensor_on_gpu_) {
+            dev_ctx->Wait();
+          }
+          framework::TensorCopy(
+              step_score, platform::CPUPlace(), *dev_ctx, &out);
           dev_ctx->Wait();
         }
 
@@ -89,6 +108,7 @@ struct BeamSearchDecodeFunctor {
   void apply() const;
 
   bool tensor_on_gpu_;
+  bool tensor_on_npu_;
   size_t beam_size_;
   int end_id_;
   // TODO(Superjomn) Here might result serious performance issue in the
@@ -105,13 +125,13 @@ struct BeamSearchDecodeFunctor {
 template <typename T>
 void BeamSearchDecodeFunctor::apply() const {
   BeamSearchDecoder<T> beam_search_decoder(beam_size_, end_id_);
-  // Check if the tensor is on GPU. If so, use the CPU copy instead
-  if (tensor_on_gpu_) {
-    beam_search_decoder.Backtrace(step_ids_, step_scores_, id_tensor_,
-                                  score_tensor_);
+  // Check if the tensor is on GPU or NPU. If so, use the CPU copy instead
+  if (tensor_on_gpu_ || tensor_on_npu_) {
+    beam_search_decoder.Backtrace(
+        step_ids_, step_scores_, id_tensor_, score_tensor_);
   } else {
-    beam_search_decoder.Backtrace(step_ids_origin_, step_scores_origin_,
-                                  id_tensor_, score_tensor_);
+    beam_search_decoder.Backtrace(
+        step_ids_origin_, step_scores_origin_, id_tensor_, score_tensor_);
   }
 }
 
@@ -142,7 +162,8 @@ class BeamSearchDecodeOp : public framework::OperatorBase {
     const LoDTensorArray* scores = ctx.Input<LoDTensorArray>("Scores");
     const size_t step_num = ids->size();
     PADDLE_ENFORCE_GT(
-        step_num, 0UL,
+        step_num,
+        0UL,
         platform::errors::InvalidArgument(
             "beam search steps, which is the"
             "size of Input(Ids) LoDTensorArray. beam search steps should "
@@ -150,7 +171,8 @@ class BeamSearchDecodeOp : public framework::OperatorBase {
             step_num));
     const size_t source_num = ids->at(0).lod().at(0).size() - 1;
     PADDLE_ENFORCE_GT(
-        source_num, 0UL,
+        source_num,
+        0UL,
         platform::errors::InvalidArgument(
             "source_num is the sequence number of the"
             "first decoding step, indicating by Input(Ids)[0].lod[0].size. "
@@ -160,7 +182,8 @@ class BeamSearchDecodeOp : public framework::OperatorBase {
 
     for (size_t i = 0; i < step_num; ++i) {
       PADDLE_ENFORCE_EQ(
-          ids->at(i).lod().size(), 2UL,
+          ids->at(i).lod().size(),
+          2UL,
           platform::errors::InvalidArgument(
               "For the i step in beam search steps,"
               "the size of Input(Ids)[i].lod() should larger than 2,"
@@ -176,9 +199,9 @@ class BeamSearchDecodeOp : public framework::OperatorBase {
     LoDTensor* sentenceScores = ctx.Output<LoDTensor>("SentenceScores");
 
     framework::VisitDataType(
-        scores->at(0).type(),
-        BeamSearchDecodeFunctor(*ids, *scores, sentenceIds, sentenceScores,
-                                beam_size, end_id));
+        framework::TransToProtoVarType(scores->at(0).dtype()),
+        BeamSearchDecodeFunctor(
+            *ids, *scores, sentenceIds, sentenceScores, beam_size, end_id));
   }
 };
 
@@ -220,23 +243,29 @@ hypothesis has.
 class BeamSearchDecodeInferShape : public framework::InferShapeBase {
  public:
   void operator()(framework::InferShapeContext* context) const override {
-    OP_INOUT_CHECK(context->HasInput("Ids"), "Input", "Ids",
+    OP_INOUT_CHECK(
+        context->HasInput("Ids"), "Input", "Ids", "BeamSearchDecode");
+    OP_INOUT_CHECK(
+        context->HasInput("Scores"), "Input", "Scores", "BeamSearchDecode");
+    OP_INOUT_CHECK(context->HasOutput("SentenceIds"),
+                   "Output",
+                   "SentenceIds",
                    "BeamSearchDecode");
-    OP_INOUT_CHECK(context->HasInput("Scores"), "Input", "Scores",
+    OP_INOUT_CHECK(context->HasOutput("SentenceScores"),
+                   "Output",
+                   "SentenceScores",
                    "BeamSearchDecode");
-    OP_INOUT_CHECK(context->HasOutput("SentenceIds"), "Output", "SentenceIds",
-                   "BeamSearchDecode");
-    OP_INOUT_CHECK(context->HasOutput("SentenceScores"), "Output",
-                   "SentenceScores", "BeamSearchDecode");
   }
 };
 
 class BeamSearchDecodeInferVarType : public framework::VarTypeInference {
  public:
   void operator()(framework::InferVarTypeContext* ctx) const override {
-    ctx->SetOutputType("SentenceIds", framework::proto::VarType::LOD_TENSOR,
+    ctx->SetOutputType("SentenceIds",
+                       framework::proto::VarType::LOD_TENSOR,
                        framework::ALL_ELEMENTS);
-    ctx->SetOutputType("SentenceScores", framework::proto::VarType::LOD_TENSOR,
+    ctx->SetOutputType("SentenceScores",
+                       framework::proto::VarType::LOD_TENSOR,
                        framework::ALL_ELEMENTS);
   }
 };
@@ -245,7 +274,8 @@ class BeamSearchDecodeInferVarType : public framework::VarTypeInference {
 }  // namespace paddle
 
 REGISTER_OPERATOR(
-    beam_search_decode, paddle::operators::BeamSearchDecodeOp,
+    beam_search_decode,
+    paddle::operators::BeamSearchDecodeOp,
     paddle::operators::BeamSearchDecodeOpProtoMaker,
     paddle::operators::BeamSearchDecodeInferShape,
     paddle::operators::BeamSearchDecodeInferVarType,

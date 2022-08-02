@@ -25,13 +25,14 @@ paddle.enable_static()
 
 
 class TestFleetAMPOptimizer(TestFleetMetaOptimizer):
+
     def test_amp_optimizer_backward(self):
         """ test amp optimizer backward """
         train_prog, startup_prog = fluid.Program(), fluid.Program()
         avg_cost, strategy = self.net(train_prog, startup_prog)
 
-        opt = fluid.optimizer.MomentumOptimizer(
-            learning_rate=0.001, momentum=0.9)
+        opt = fluid.optimizer.MomentumOptimizer(learning_rate=0.001,
+                                                momentum=0.9)
         opt = AMPOptimizer(opt)
 
         self.set_strategy(strategy, 'amp')
@@ -48,8 +49,8 @@ class TestFleetAMPOptimizer(TestFleetMetaOptimizer):
         train_prog, startup_prog = fluid.Program(), fluid.Program()
         avg_cost, strategy = self.net(train_prog, startup_prog)
 
-        opt = fluid.optimizer.MomentumOptimizer(
-            learning_rate=0.001, momentum=0.9)
+        opt = fluid.optimizer.MomentumOptimizer(learning_rate=0.001,
+                                                momentum=0.9)
         opt = AMPOptimizer(opt)
 
         self.set_strategy(strategy, 'amp')
@@ -68,8 +69,8 @@ class TestFleetAMPOptimizer(TestFleetMetaOptimizer):
         train_prog, startup_prog = fluid.Program(), fluid.Program()
         avg_cost, strategy = self.net(train_prog, startup_prog)
 
-        opt = fluid.optimizer.MomentumOptimizer(
-            learning_rate=0.001, momentum=0.9)
+        opt = fluid.optimizer.MomentumOptimizer(learning_rate=0.001,
+                                                momentum=0.9)
         opt = AMPOptimizer(opt)
 
         self.set_strategy(strategy, 'amp')
@@ -88,6 +89,21 @@ class TestFleetAMPOptimizer(TestFleetMetaOptimizer):
         avg_cost, strategy = self.net(train_prog, startup_prog)
         self.set_strategy(strategy, 'amp')
         self.optimizer(avg_cost, strategy, train_prog, startup_prog)
+
+        ops = [op.type for op in avg_cost.block.ops]
+        self.assertIn('cast', ops)
+        self.assertIn('check_finite_and_unscale', ops)
+
+    def test_pure_fp16_optimizer(self):
+        """ test pure fp16 """
+        train_prog, startup_prog = fluid.Program(), fluid.Program()
+        avg_cost, strategy = self.net(train_prog, startup_prog)
+        self.set_strategy(strategy, 'pure_fp16')
+        self.optimizer(avg_cost, strategy, train_prog, startup_prog)
+
+        params = train_prog.all_parameters()
+        for param in train_prog.all_parameters():
+            self.assertEqual(param.dtype, fluid.core.VarDesc.VarType.FP16)
 
         ops = [op.type for op in avg_cost.block.ops]
         self.assertIn('cast', ops)

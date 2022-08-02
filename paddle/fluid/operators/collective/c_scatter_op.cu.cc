@@ -14,9 +14,9 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/collective/c_scatter_op.h"
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
 #include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #endif
 
 namespace paddle {
@@ -26,37 +26,42 @@ template <typename T>
 class CScatterOpCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     auto x = ctx.Input<framework::LoDTensor>("X");
     auto out = ctx.Output<framework::LoDTensor>("Out");
     int numel = x->numel();
-    ncclDataType_t dtype = platform::ToNCCLDataType(x->type());
+    ncclDataType_t dtype =
+        platform::ToNCCLDataType(framework::TransToProtoVarType(x->dtype()));
 
     int nranks = ctx.Attr<int>("nranks");
     int root_id = ctx.Attr<int>("root");
     int ring_id = ctx.Attr<int>("ring_id");
     auto place = ctx.GetPlace();
     auto comm = platform::NCCLCommContext::Instance().Get(ring_id, place);
-    PADDLE_ENFORCE_EQ(nranks, comm->nranks(),
+    PADDLE_ENFORCE_EQ(nranks,
+                      comm->nranks(),
                       platform::errors::InvalidArgument(
                           "The number of ranks (%d) you set of must "
                           "be equal to comm->nranks (%d).",
-                          nranks, comm->nranks()));
+                          nranks,
+                          comm->nranks()));
     PADDLE_ENFORCE_GE(
-        root_id, 0,
+        root_id,
+        0,
         platform::errors::InvalidArgument(
             "The root_id (%d) for c_scatter_op must be non-negative.",
             root_id));
     PADDLE_ENFORCE_GE(
-        ring_id, 0,
+        ring_id,
+        0,
         platform::errors::InvalidArgument(
             "The ring_id (%d) for c_scatter_op must be non-negative.",
             ring_id));
 
-    cudaStream_t stream = nullptr;
+    gpuStream_t stream = nullptr;
     if (ctx.Attr<bool>("use_calc_stream")) {
       auto dev_ctx = platform::DeviceContextPool::Instance().Get(place);
-      stream = static_cast<platform::CUDADeviceContext*>(dev_ctx)->stream();
+      stream = static_cast<phi::GPUContext*>(dev_ctx)->stream();
     } else {
       stream = comm->stream();
     }
@@ -66,15 +71,20 @@ class CScatterOpCUDAKernel : public framework::OpKernel<T> {
     framework::Tensor temp;
     auto out_ptr = temp.mutable_data<T>(out_dims, place);
     if (root_id == comm->rank()) {
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclBcast(
-          reinterpret_cast<void*>(const_cast<T*>(x->data<T>())), numel, dtype,
-          root_id, comm->comm(), stream));
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclBcast(
+          reinterpret_cast<void*>(const_cast<T*>(x->data<T>())),
+          numel,
+          dtype,
+          root_id,
+          comm->comm(),
+          stream));
 
-      framework::TensorCopy(*static_cast<const framework::Tensor*>(x), place,
+      framework::TensorCopy(*static_cast<const framework::Tensor*>(x),
+                            place,
                             *platform::DeviceContextPool::Instance().Get(place),
                             static_cast<framework::Tensor*>(&temp));
     } else {
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclBcast(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclBcast(
           out_ptr, numel, dtype, root_id, comm->comm(), stream));
     }
 
@@ -85,11 +95,13 @@ class CScatterOpCUDAKernel : public framework::OpKernel<T> {
     temp.Resize(out_dims);
     out->mutable_data<T>(out_dims, place);
     framework::TensorCopySync(*static_cast<const framework::Tensor*>(&temp),
-                              place, static_cast<framework::Tensor*>(out));
+                              place,
+                              static_cast<framework::Tensor*>(out));
     out->Resize(out_dims);
 #else
     PADDLE_ENFORCE_EQ(
-        true, false,
+        true,
+        false,
         platform::errors::Unavailable("PaddlePaddle should compile with GPU."));
 #endif
   }
@@ -101,7 +113,8 @@ class CScatterOpCUDAKernel : public framework::OpKernel<T> {
 namespace ops = paddle::operators;
 namespace plat = paddle::platform;
 
-REGISTER_OP_CUDA_KERNEL(c_scatter, ops::CScatterOpCUDAKernel<float>,
+REGISTER_OP_CUDA_KERNEL(c_scatter,
+                        ops::CScatterOpCUDAKernel<float>,
                         ops::CScatterOpCUDAKernel<double>,
                         ops::CScatterOpCUDAKernel<int>,
                         ops::CScatterOpCUDAKernel<int64_t>,

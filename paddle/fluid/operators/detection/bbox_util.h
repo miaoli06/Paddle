@@ -14,6 +14,8 @@ limitations under the License. */
 
 #pragma once
 #include <algorithm>
+
+#include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/tensor.h"
@@ -31,7 +33,7 @@ struct RangeInitFunctor {
 };
 
 template <typename T>
-inline HOSTDEVICE T RoIArea(const T* box, bool normalized) {
+inline HOSTDEVICE T RoIArea(const T* box, bool pixel_offset = true) {
   if (box[2] < box[0] || box[3] < box[1]) {
     // If coordinate values are is invalid
     // (e.g. xmax < xmin or ymax < ymin), return 0.
@@ -39,11 +41,11 @@ inline HOSTDEVICE T RoIArea(const T* box, bool normalized) {
   } else {
     const T w = box[2] - box[0];
     const T h = box[3] - box[1];
-    if (normalized) {
-      return w * h;
-    } else {
+    if (pixel_offset) {
       // If coordinate values are not within range [0, 1].
       return (w + 1) * (h + 1);
+    } else {
+      return w * h;
     }
   }
 }
@@ -53,9 +55,12 @@ inline HOSTDEVICE T RoIArea(const T* box, bool normalized) {
  * given proposal boxes and ground-truth boxes.
  */
 template <typename T>
-inline void BoxToDelta(const int box_num, const framework::Tensor& ex_boxes,
-                       const framework::Tensor& gt_boxes, const float* weights,
-                       const bool normalized, framework::Tensor* box_delta) {
+inline void BoxToDelta(const int box_num,
+                       const framework::Tensor& ex_boxes,
+                       const framework::Tensor& gt_boxes,
+                       const float* weights,
+                       const bool normalized,
+                       framework::Tensor* box_delta) {
   auto ex_boxes_et = framework::EigenTensor<T, 2>::From(ex_boxes);
   auto gt_boxes_et = framework::EigenTensor<T, 2>::From(gt_boxes);
   auto trg = framework::EigenTensor<T, 2>::From(*box_delta);
@@ -86,8 +91,8 @@ inline void BoxToDelta(const int box_num, const framework::Tensor& ex_boxes,
 }
 
 template <typename T>
-void Gather(const T* in, const int in_stride, const int* index, const int num,
-            T* out) {
+void Gather(
+    const T* in, const int in_stride, const int* index, const int num, T* out) {
   const int stride_bytes = in_stride * sizeof(T);
   for (int i = 0; i < num; ++i) {
     int id = index[i];
@@ -121,8 +126,9 @@ void BboxOverlaps(const framework::Tensor& r_boxes,
       inter_h = std::max(y_max - y_min + 1, zero);
       inter_area = inter_w * inter_h;
       overlaps_et(i, j) =
-          (inter_area == 0.) ? 0 : inter_area /
-                                       (r_box_area + c_box_area - inter_area);
+          (inter_area == 0.)
+              ? 0
+              : inter_area / (r_box_area + c_box_area - inter_area);
     }
   }
 }
@@ -142,25 +148,30 @@ void MaxIoU(const framework::Tensor& iou, framework::Tensor* max_iou) {
   }
 }
 
-static void AppendProposals(framework::Tensor* dst, int64_t offset,
+static void AppendProposals(framework::Tensor* dst,
+                            int64_t offset,
                             const framework::Tensor& src) {
-  auto* out_data = dst->data<void>();
-  auto* to_add_data = src.data<void>();
-  size_t size_of_t = framework::SizeOfType(src.type());
+  auto* out_data = dst->data();
+  auto* to_add_data = src.data();
+  size_t size_of_t = framework::DataTypeSize(src.dtype());
   offset *= size_of_t;
   std::memcpy(
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(out_data) + offset),
-      to_add_data, src.numel() * size_of_t);
+      to_add_data,
+      src.numel() * size_of_t);
 }
 
 template <class T>
 void ClipTiledBoxes(const platform::DeviceContext& ctx,
                     const framework::Tensor& im_info,
                     const framework::Tensor& input_boxes,
-                    framework::Tensor* out, bool is_scale = true) {
+                    framework::Tensor* out,
+                    bool is_scale = true,
+                    bool pixel_offset = true) {
   T* out_data = out->mutable_data<T>(ctx.GetPlace());
   const T* im_info_data = im_info.data<T>();
   const T* input_boxes_data = input_boxes.data<T>();
+  T offset = pixel_offset ? static_cast<T>(1.0) : 0;
   T zero(0);
   T im_w =
       is_scale ? round(im_info_data[1] / im_info_data[2]) : im_info_data[1];
@@ -168,13 +179,17 @@ void ClipTiledBoxes(const platform::DeviceContext& ctx,
       is_scale ? round(im_info_data[0] / im_info_data[2]) : im_info_data[0];
   for (int64_t i = 0; i < input_boxes.numel(); ++i) {
     if (i % 4 == 0) {
-      out_data[i] = std::max(std::min(input_boxes_data[i], im_w - 1), zero);
+      out_data[i] =
+          std::max(std::min(input_boxes_data[i], im_w - offset), zero);
     } else if (i % 4 == 1) {
-      out_data[i] = std::max(std::min(input_boxes_data[i], im_h - 1), zero);
+      out_data[i] =
+          std::max(std::min(input_boxes_data[i], im_h - offset), zero);
     } else if (i % 4 == 2) {
-      out_data[i] = std::max(std::min(input_boxes_data[i], im_w - 1), zero);
+      out_data[i] =
+          std::max(std::min(input_boxes_data[i], im_w - offset), zero);
     } else {
-      out_data[i] = std::max(std::min(input_boxes_data[i], im_h - 1), zero);
+      out_data[i] =
+          std::max(std::min(input_boxes_data[i], im_h - offset), zero);
     }
   }
 }
@@ -182,31 +197,40 @@ void ClipTiledBoxes(const platform::DeviceContext& ctx,
 // Filter the box with small area
 template <class T>
 void FilterBoxes(const platform::DeviceContext& ctx,
-                 const framework::Tensor* boxes, float min_size,
-                 const framework::Tensor& im_info, bool is_scale,
-                 framework::Tensor* keep) {
+                 const framework::Tensor* boxes,
+                 float min_size,
+                 const framework::Tensor& im_info,
+                 bool is_scale,
+                 framework::Tensor* keep,
+                 bool pixel_offset = true) {
   const T* im_info_data = im_info.data<T>();
   const T* boxes_data = boxes->data<T>();
   keep->Resize({boxes->dims()[0]});
   min_size = std::max(min_size, 1.0f);
   int* keep_data = keep->mutable_data<int>(ctx.GetPlace());
+  T offset = pixel_offset ? static_cast<T>(1.0) : 0;
 
   int keep_len = 0;
   for (int i = 0; i < boxes->dims()[0]; ++i) {
-    T ws = boxes_data[4 * i + 2] - boxes_data[4 * i] + 1;
-    T hs = boxes_data[4 * i + 3] - boxes_data[4 * i + 1] + 1;
-    T x_ctr = boxes_data[4 * i] + ws / 2;
-    T y_ctr = boxes_data[4 * i + 1] + hs / 2;
+    T ws = boxes_data[4 * i + 2] - boxes_data[4 * i] + offset;
+    T hs = boxes_data[4 * i + 3] - boxes_data[4 * i + 1] + offset;
+    if (pixel_offset) {
+      T x_ctr = boxes_data[4 * i] + ws / 2;
+      T y_ctr = boxes_data[4 * i + 1] + hs / 2;
 
-    if (is_scale) {
-      ws = (boxes_data[4 * i + 2] - boxes_data[4 * i]) / im_info_data[2] + 1;
-      hs =
-          (boxes_data[4 * i + 3] - boxes_data[4 * i + 1]) / im_info_data[2] + 1;
-    }
-
-    if (ws >= min_size && hs >= min_size && x_ctr <= im_info_data[1] &&
-        y_ctr <= im_info_data[0]) {
-      keep_data[keep_len++] = i;
+      if (is_scale) {
+        ws = (boxes_data[4 * i + 2] - boxes_data[4 * i]) / im_info_data[2] + 1;
+        hs = (boxes_data[4 * i + 3] - boxes_data[4 * i + 1]) / im_info_data[2] +
+             1;
+      }
+      if (ws >= min_size && hs >= min_size && x_ctr <= im_info_data[1] &&
+          y_ctr <= im_info_data[0]) {
+        keep_data[keep_len++] = i;
+      }
+    } else {
+      if (ws >= min_size && hs >= min_size) {
+        keep_data[keep_len++] = i;
+      }
     }
   }
   keep->Resize({keep_len});
@@ -217,7 +241,8 @@ static void BoxCoder(const platform::DeviceContext& ctx,
                      framework::Tensor* all_anchors,
                      framework::Tensor* bbox_deltas,
                      framework::Tensor* variances,
-                     framework::Tensor* proposals) {
+                     framework::Tensor* proposals,
+                     const bool pixel_offset = true) {
   T* proposals_data = proposals->mutable_data<T>(ctx.GetPlace());
 
   int64_t row = all_anchors->dims()[0];
@@ -230,9 +255,11 @@ static void BoxCoder(const platform::DeviceContext& ctx,
     variances_data = variances->data<T>();
   }
 
+  T offset = pixel_offset ? static_cast<T>(1.0) : 0;
   for (int64_t i = 0; i < row; ++i) {
-    T anchor_width = anchor_data[i * len + 2] - anchor_data[i * len] + 1.0;
-    T anchor_height = anchor_data[i * len + 3] - anchor_data[i * len + 1] + 1.0;
+    T anchor_width = anchor_data[i * len + 2] - anchor_data[i * len] + offset;
+    T anchor_height =
+        anchor_data[i * len + 3] - anchor_data[i * len + 1] + offset;
 
     T anchor_center_x = anchor_data[i * len] + 0.5 * anchor_width;
     T anchor_center_y = anchor_data[i * len + 1] + 0.5 * anchor_height;
@@ -270,8 +297,8 @@ static void BoxCoder(const platform::DeviceContext& ctx,
 
     proposals_data[i * len] = bbox_center_x - bbox_width / 2;
     proposals_data[i * len + 1] = bbox_center_y - bbox_height / 2;
-    proposals_data[i * len + 2] = bbox_center_x + bbox_width / 2 - 1;
-    proposals_data[i * len + 3] = bbox_center_y + bbox_height / 2 - 1;
+    proposals_data[i * len + 2] = bbox_center_x + bbox_width / 2 - offset;
+    proposals_data[i * len + 3] = bbox_center_y + bbox_height / 2 - offset;
   }
   // return proposals;
 }

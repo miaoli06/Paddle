@@ -12,10 +12,10 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include "gflags/gflags.h"
 #include "paddle/fluid/inference/tests/api/trt_test_helper.h"
 
 namespace paddle {
@@ -23,6 +23,11 @@ namespace inference {
 
 TEST(TensorRT_fc, compare) {
   std::string model_dir = FLAGS_infer_model + "/fc_uint8";
+  AnalysisConfig config;
+  config.EnableUseGpu(100, 0);
+  config.SetModel(model_dir);
+  config.DisableGlogInfo();
+  auto predictor = CreatePaddlePredictor(config);
   compare(model_dir, /* use_tensorrt */ true);
   // Open it when need.
   // profile(model_dir, /* use_analysis */ true, FLAGS_use_tensorrt);

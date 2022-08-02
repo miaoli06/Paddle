@@ -20,7 +20,7 @@
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/tensor.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 DECLARE_bool(enable_pull_box_padding_zero);
 
@@ -36,7 +36,7 @@ static void PaddingZeros(const framework::ExecutionContext &ctx,
   data->mutable_data<T>(ctx.GetPlace());
 
   auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
-  math::set_constant(dev_ctx, data, 0);
+  phi::funcs::set_constant(dev_ctx, data, 0);
 
   //  auto data_eigen = framework::EigenVector<T>::Flatten(*data);
   //  auto &place = *ctx.template device_context<platform::CUDADeviceContext>()
@@ -114,7 +114,7 @@ static void PullBoxSparseFunctor(const framework::ExecutionContext &ctx) {
     }
   } else {
     for (size_t i = 0; i < slot_size; ++i) {
-      const auto *slot = inputs[i];
+    const auto *slot = inputs[i];
       if (slot->numel() == 0) {
         continue;
       }
@@ -186,17 +186,17 @@ static void PushBoxSparseFunctor(const framework::ExecutionContext &ctx) {
     all_keys[i] = single_slot_keys;
     slot_lengths[i] = numel;
     if (slot_idx == -1) {
-      int cur_batch_size =
-          slot->lod().size() ? slot->lod()[0].size() - 1 : slot->dims()[0];
-      if (batch_size == -1) {
-        batch_size = cur_batch_size;
-      } else {
+    int cur_batch_size =
+        slot->lod().size() ? slot->lod()[0].size() - 1 : slot->dims()[0];
+    if (batch_size == -1) {
+      batch_size = cur_batch_size;
+    } else {
         PADDLE_ENFORCE_EQ(
             batch_size, cur_batch_size,
-            platform::errors::PreconditionNotMet(
-                "The batch size of all input slots should be same, "
-                "please cheack"));
-      }
+                        platform::errors::PreconditionNotMet(
+                            "The batch size of all input slots should be same, "
+                            "please cheack"));
+    }
     }
     const float *grad_value = d_output[i]->data<float>();
     all_grad_values[i] = grad_value;

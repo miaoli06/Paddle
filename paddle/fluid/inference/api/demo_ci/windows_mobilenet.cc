@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
+
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "gflags/gflags.h"
 #include "paddle/include/paddle_inference_api.h"
 
 DEFINE_string(modeldir, "", "Directory of the inference model.");
@@ -72,8 +73,8 @@ void RunAnalysis() {
   auto output_names = predictor->GetOutputNames();
   auto output_t = predictor->GetOutputTensor(output_names[0]);
   std::vector<int> output_shape = output_t->shape();
-  int out_num = std::accumulate(output_shape.begin(), output_shape.end(), 1,
-                                std::multiplies<int>());
+  int out_num = std::accumulate(
+      output_shape.begin(), output_shape.end(), 1, std::multiplies<int>());
 
   out_data.resize(out_num);
   output_t->copy_to_cpu(out_data.data());
@@ -84,7 +85,7 @@ void RunAnalysis() {
 }  // namespace paddle
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  ::GFLAGS_NAMESPACE::ParseCommandLineFlags(&argc, &argv, true);
   paddle::demo::RunAnalysis();
   std::cout << "=========================Runs successfully===================="
             << std::endl;

@@ -23,12 +23,19 @@ paddle.enable_static()
 
 
 class TestCollectiveAllreduceAPI(TestDistBase):
+
     def _setup_config(self):
         pass
 
     def test_allreduce_nccl(self):
-        self.check_with_place("collective_allreduce_api.py", "allreduce",
-                              "nccl")
+        if paddle.fluid.core.is_compiled_with_cuda():
+            self.check_with_place("collective_allreduce_api.py", "allreduce",
+                                  "nccl")
+
+    def test_allreduce_bkcl(self):
+        if paddle.fluid.core.is_compiled_with_xpu():
+            self.check_with_place("collective_allreduce_api.py", "allreduce",
+                                  "bkcl")
 
     def test_allreduce_gloo(self):
         self.check_with_place("collective_allreduce_api.py", "allreduce",

@@ -19,21 +19,23 @@ limitations under the License. */
 #include <cstring>
 #include <string>
 #include <vector>
+
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/gather.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
 namespace operators {
 
 const int kBoxDim = 4;
 
-inline std::vector<size_t> GetLodFromRoisNum(const Tensor* rois_num) {
+inline std::vector<size_t> GetLodFromRoisNum(
+    const framework::Tensor* rois_num) {
   std::vector<size_t> rois_lod;
   auto* rois_num_data = rois_num->data<int>();
-  Tensor cpu_tensor;
+  framework::Tensor cpu_tensor;
   if (platform::is_gpu_place(rois_num->place())) {
-    TensorCopySync(*rois_num, platform::CPUPlace(), &cpu_tensor);
+    paddle::framework::TensorCopySync(
+        *rois_num, platform::CPUPlace(), &cpu_tensor);
     rois_num_data = cpu_tensor.data<int>();
   }
   rois_lod.push_back(static_cast<size_t>(0));
@@ -44,7 +46,7 @@ inline std::vector<size_t> GetLodFromRoisNum(const Tensor* rois_num) {
 }
 
 template <typename T>
-static inline T BBoxArea(const T* box, bool normalized) {
+static inline T BBoxArea(const T* box, bool pixel_offset) {
   if (box[2] < box[0] || box[3] < box[1]) {
     // If coordinate values are is invalid
     // (e.g. xmax < xmin or ymax < ymin), return 0.
@@ -52,11 +54,11 @@ static inline T BBoxArea(const T* box, bool normalized) {
   } else {
     const T w = box[2] - box[0];
     const T h = box[3] - box[1];
-    if (normalized) {
-      return w * h;
-    } else {
+    if (pixel_offset) {
       // If coordinate values are not within range [0, 1].
       return (w + 1) * (h + 1);
+    } else {
+      return w * h;
     }
   }
 }
@@ -77,20 +79,23 @@ class DistributeFpnProposalsOpKernel : public framework::OpKernel<T> {
     const int max_level = context.Attr<int>("max_level");
     const int refer_level = context.Attr<int>("refer_level");
     const int refer_scale = context.Attr<int>("refer_scale");
+    const bool pixel_offset = context.Attr<bool>("pixel_offset");
     const int num_level = max_level - min_level + 1;
 
     // check that the fpn_rois is not empty
     if (!context.HasInput("RoisNum")) {
-      PADDLE_ENFORCE_EQ(fpn_rois->lod().size(), 1UL,
+      PADDLE_ENFORCE_EQ(fpn_rois->lod().size(),
+                        1UL,
                         platform::errors::InvalidArgument(
                             "DistributeFpnProposalsOp needs LoD "
-                            "with one level."));
+                            "with one level. But received level is %d",
+                            fpn_rois->lod().size()));
     }
 
     std::vector<size_t> fpn_rois_lod;
     int fpn_rois_num;
     if (context.HasInput("RoisNum")) {
-      auto* rois_num = context.Input<Tensor>("RoisNum");
+      auto* rois_num = context.Input<framework::Tensor>("RoisNum");
       fpn_rois_lod = GetLodFromRoisNum(rois_num);
     } else {
       fpn_rois_lod = fpn_rois->lod().back();
@@ -102,12 +107,12 @@ class DistributeFpnProposalsOpKernel : public framework::OpKernel<T> {
     std::vector<int> num_rois_level(num_level, 0);
     std::vector<int> num_rois_level_integral(num_level + 1, 0);
     for (size_t i = 0; i < fpn_rois_lod.size() - 1; ++i) {
-      Tensor fpn_rois_slice =
+      auto fpn_rois_slice =
           fpn_rois->Slice(fpn_rois_lod[i], fpn_rois_lod[i + 1]);
       const T* rois_data = fpn_rois_slice.data<T>();
       for (int j = 0; j < fpn_rois_slice.dims()[0]; ++j) {
         // get the target level of current rois
-        T roi_scale = std::sqrt(BBoxArea(rois_data, false));
+        T roi_scale = std::sqrt(BBoxArea(rois_data, pixel_offset));
         int tgt_lvl = std::floor(std::log2(roi_scale / refer_scale + (T)1e-6) +
                                  refer_level);
         tgt_lvl = std::min(max_level, std::max(tgt_lvl, min_level));
@@ -137,7 +142,7 @@ class DistributeFpnProposalsOpKernel : public framework::OpKernel<T> {
     std::vector<int> restore_index_inter(fpn_rois_num, -1);
     // distribute the rois into different fpn level by target level
     for (size_t i = 0; i < fpn_rois_lod.size() - 1; ++i) {
-      Tensor fpn_rois_slice =
+      auto fpn_rois_slice =
           fpn_rois->Slice(fpn_rois_lod[i], fpn_rois_lod[i + 1]);
       const T* rois_data = fpn_rois_slice.data<T>();
       size_t cur_offset = fpn_rois_lod[i];
@@ -147,7 +152,8 @@ class DistributeFpnProposalsOpKernel : public framework::OpKernel<T> {
       }
       for (int j = 0; j < fpn_rois_slice.dims()[0]; ++j) {
         int lvl = target_level[cur_offset + j];
-        memcpy(multi_fpn_rois_data[lvl - min_level], rois_data,
+        memcpy(multi_fpn_rois_data[lvl - min_level],
+               rois_data,
                kBoxDim * sizeof(T));
         multi_fpn_rois_data[lvl - min_level] += kBoxDim;
         int index_in_shuffle = num_rois_level_integral[lvl - min_level] +
@@ -160,7 +166,8 @@ class DistributeFpnProposalsOpKernel : public framework::OpKernel<T> {
     for (int i = 0; i < fpn_rois_num; ++i) {
       restore_index_data[restore_index_inter[i]] = i;
     }
-    auto multi_rois_num = context.MultiOutput<Tensor>("MultiLevelRoIsNum");
+    auto multi_rois_num =
+        context.MultiOutput<framework::Tensor>("MultiLevelRoIsNum");
     if (multi_rois_num.size() > 0) {
       int batch_size = fpn_rois_lod.size() - 1;
       for (int i = 0; i < num_level; ++i) {

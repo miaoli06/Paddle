@@ -51,6 +51,7 @@ def generate_query_key_value_cache(self_attention,
                                    num_heads,
                                    query_length,
                                    embed_dim,
+                                   attn_mask_type,
                                    key_length=None,
                                    value_length=None,
                                    kdim=None,
@@ -58,8 +59,14 @@ def generate_query_key_value_cache(self_attention,
                                    cache=None):
     query = np.random.rand(batch_size, query_length,
                            embed_dim).astype("float32")
-    attn_mask = np.zeros((batch_size, num_heads, query_length, key_length))
-    attn_mask[0][0][0][0] = -1e9
+    attn_mask = np.ones((batch_size, num_heads, query_length, key_length),
+                        dtype=attn_mask_type)
+    if attn_mask_type == 'int64':
+        attn_mask = np.tril(attn_mask)
+    elif attn_mask_type == 'float64':
+        attn_mask = (np.tril(attn_mask) - 1.0) * 1e9
+    else:
+        raise ValueError("'attn_mask_type' should be 'int64' or 'float64'.")
 
     head_dim = embed_dim // num_heads
     if self_attention:
@@ -70,15 +77,18 @@ def generate_query_key_value_cache(self_attention,
     cache_dict = {}
     if cache:
         if not self_attention:
-            cache_dict["static_k"] = np.random.rand(
-                batch_size, num_heads, key_length, head_dim).astype("float32")
-            cache_dict["static_v"] = np.random.rand(
-                batch_size, num_heads, value_length, head_dim).astype("float32")
+            cache_dict["static_k"] = np.random.rand(batch_size, num_heads,
+                                                    key_length,
+                                                    head_dim).astype("float32")
+            cache_dict["static_v"] = np.random.rand(batch_size, num_heads,
+                                                    value_length,
+                                                    head_dim).astype("float32")
         else:
             cache_dict["k"] = np.random.rand(batch_size, num_heads, key_length,
                                              head_dim).astype("float32")
-            cache_dict["v"] = np.random.rand(
-                batch_size, num_heads, value_length, head_dim).astype("float32")
+            cache_dict["v"] = np.random.rand(batch_size, num_heads,
+                                             value_length,
+                                             head_dim).astype("float32")
     else:
         cache_dict = None
     return query, key, value, attn_mask, cache_dict
@@ -103,8 +113,8 @@ def softmax(x):
 def batch_matmul(x, y):
     assert x.shape[0] == y.shape[0]
     assert x.shape[1] == y.shape[1]
-    retval = np.zeros(
-        (x.shape[0], x.shape[1], x.shape[2], y.shape[3]), dtype=np.float64)
+    retval = np.zeros((x.shape[0], x.shape[1], x.shape[2], y.shape[3]),
+                      dtype=np.float64)
     for i in range(x.shape[0]):
         for j in range(x.shape[1]):
             retval[i, j, :, :] = np.matmul(x[i, j, :, :], y[i, j, :, :])
@@ -115,6 +125,10 @@ def scaled_dot_product_attention(q, k, v, d_key, attn_mask, multi_head_attn):
     k = k.transpose([0, 1, 3, 2])
     qkt = batch_matmul(q, k / np.sqrt(d_key, dtype=np.float64))
     if attn_mask is not None:
+        if attn_mask.dtype.name == 'int64':
+            attn_mask = (attn_mask.astype(qkt.dtype) - 1.0) * 1e9
+        else:
+            attn_mask = attn_mask.astype(qkt.dtype)
         qkt += attn_mask
     weight = softmax(qkt)
     attn_heads = batch_matmul(weight, v)
@@ -209,7 +223,9 @@ def ffn(src, encoder_layer, ffn_fc1_act="relu"):
 
 
 class TestTransformer(unittest.TestCase):
+
     def test_multi_head_attention(self):
+
         def multihead_attention_test_helper(self_attention, cache):
             paddle.seed(2020)
             paddle.framework.random._manual_program_seed(2020)
@@ -219,53 +235,57 @@ class TestTransformer(unittest.TestCase):
                 # generate params for multi_head_attention
                 batch_size, query_length, key_length, value_length, embed_dim, kdim, vdim, num_heads, attn_dropout = generate_basic_params(
                     "attn", self_attention)
-                query, key, value, attn_mask, cache_dict = generate_query_key_value_cache(
-                    self_attention, batch_size, num_heads, query_length,
-                    embed_dim, key_length, value_length, kdim, vdim, cache)
-                if cache and self_attention:
-                    attn_mask = np.concatenate((attn_mask, attn_mask), axis=3)
-                need_weight, param_attr, bias_attr = False, None, None
-                # call paddle's function
-                multi_head_attn = MultiHeadAttention(
-                    embed_dim, num_heads, attn_dropout, kdim, vdim, need_weight,
-                    param_attr, bias_attr)
-                # construct cache object
-                cache_obj = None
-                if cache_dict:
-                    if 'k' and 'v' in cache_dict:
-                        cache_obj = multi_head_attn.Cache(
-                            paddle.to_tensor(cache_dict['k']),
-                            paddle.to_tensor(cache_dict['v']))
-                    elif 'static_k' and 'static_v' in cache_dict:
-                        cache_obj = multi_head_attn.StaticCache(
-                            paddle.to_tensor(cache_dict['static_k']),
-                            paddle.to_tensor(cache_dict['static_v']))
-                if attn_mask is not None:
-                    attn_output = multi_head_attn(
-                        paddle.to_tensor(query),
-                        paddle.to_tensor(key),
-                        paddle.to_tensor(value),
-                        paddle.to_tensor(attn_mask), cache_obj)
-                else:
-                    attn_output = multi_head_attn(
-                        paddle.to_tensor(query),
-                        paddle.to_tensor(key),
-                        paddle.to_tensor(value), attn_mask, cache_obj)
-                attn_output = attn_output[0] if cache_dict else attn_output
+                for attn_mask_type in ['int64', 'float64']:
+                    query, key, value, attn_mask, cache_dict = generate_query_key_value_cache(
+                        self_attention, batch_size, num_heads, query_length,
+                        embed_dim, attn_mask_type, key_length, value_length,
+                        kdim, vdim, cache)
+                    if cache and self_attention:
+                        attn_mask = np.concatenate((attn_mask, attn_mask),
+                                                   axis=3)
+                    need_weight, param_attr, bias_attr = False, None, None
+                    # call paddle's function
+                    multi_head_attn = MultiHeadAttention(
+                        embed_dim, num_heads, attn_dropout, kdim, vdim,
+                        need_weight, param_attr, bias_attr)
+                    # construct cache object
+                    cache_obj = None
+                    if cache_dict:
+                        if 'k' and 'v' in cache_dict:
+                            cache_obj = multi_head_attn.Cache(
+                                paddle.to_tensor(cache_dict['k']),
+                                paddle.to_tensor(cache_dict['v']))
+                        elif 'static_k' and 'static_v' in cache_dict:
+                            cache_obj = multi_head_attn.StaticCache(
+                                paddle.to_tensor(cache_dict['static_k']),
+                                paddle.to_tensor(cache_dict['static_v']))
+                    if attn_mask is not None:
+                        attn_output = multi_head_attn(
+                            paddle.to_tensor(query), paddle.to_tensor(key),
+                            paddle.to_tensor(value),
+                            paddle.to_tensor(attn_mask), cache_obj)
+                    else:
+                        attn_output = multi_head_attn(paddle.to_tensor(query),
+                                                      paddle.to_tensor(key),
+                                                      paddle.to_tensor(value),
+                                                      attn_mask, cache_obj)
+                    attn_output = attn_output[0] if cache_dict else attn_output
 
-                # implementation by numpy
-                # compute q, k, v
-                q, k, v, _ = prepare_qkv(query, key, value, num_heads,
-                                         embed_dim, self_attention,
-                                         multi_head_attn, cache_dict)
-                # scale dot product attention
-                attn_heads = scaled_dot_product_attention(
-                    q, k, v, embed_dim // num_heads, attn_mask, multi_head_attn)
-                out_proj_weight = multi_head_attn.out_proj.weight.numpy()
-                reference = fc(attn_heads, out_proj_weight)
+                    # implementation by numpy
+                    # compute q, k, v
+                    q, k, v, _ = prepare_qkv(query, key, value, num_heads,
+                                             embed_dim, self_attention,
+                                             multi_head_attn, cache_dict)
+                    # scale dot product attention
+                    attn_heads = scaled_dot_product_attention(
+                        q, k, v, embed_dim // num_heads, attn_mask,
+                        multi_head_attn)
+                    out_proj_weight = multi_head_attn.out_proj.weight.numpy()
+                    reference = fc(attn_heads, out_proj_weight)
 
-                np.testing.assert_allclose(
-                    attn_output.numpy(), reference, atol=1e-6)
+                    np.testing.assert_allclose(attn_output.numpy(),
+                                               reference,
+                                               atol=1e-6)
 
         multihead_attention_test_helper(True, True)
         multihead_attention_test_helper(True, False)
@@ -291,21 +311,23 @@ class TestTransformer(unittest.TestCase):
             src_mask[0][0][0][0] = -np.inf
 
             # paddle
-            encoder_layer = TransformerEncoderLayer(
-                d_model, n_head, dim_feedforward, dropout, ffn_fc1_act,
-                attn_dropout, act_dropout)
+            encoder_layer = TransformerEncoderLayer(d_model, n_head,
+                                                    dim_feedforward, dropout,
+                                                    ffn_fc1_act, attn_dropout,
+                                                    act_dropout)
 
             encoder_output = encoder_layer(
                 paddle.to_tensor(src),
                 paddle.to_tensor(src_mask))  # paddle.to_tensor(src_mask))
             # 4.numpy:
             # paddle self attention
-            self_attn = MultiHeadAttention(
-                d_model, n_head, dropout=attn_dropout)
-            attn_output = self_attn(
-                paddle.to_tensor(src),
-                paddle.to_tensor(src),
-                paddle.to_tensor(src), paddle.to_tensor(src_mask)).numpy()
+            self_attn = MultiHeadAttention(d_model,
+                                           n_head,
+                                           dropout=attn_dropout)
+            attn_output = self_attn(paddle.to_tensor(src),
+                                    paddle.to_tensor(src),
+                                    paddle.to_tensor(src),
+                                    paddle.to_tensor(src_mask)).numpy()
 
             src = attn_output + residual
             src_norm = layer_norm(src, d_model, encoder_layer.norm1)
@@ -315,8 +337,69 @@ class TestTransformer(unittest.TestCase):
             src = residual + ffn_output
             src = layer_norm(src, d_model, encoder_layer.norm2)
 
-            np.testing.assert_allclose(
-                encoder_output.numpy(), src, rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(encoder_output.numpy(),
+                                       src,
+                                       rtol=1e-5,
+                                       atol=1e-6)
+
+    def test_transformer_encoder_layer_attr_1(self):
+        with fluid.dygraph.guard(fluid.CPUPlace()):
+            paddle.framework.seed(2020)
+            paddle.framework.random._manual_program_seed(2020)
+
+            ffn_fc1_act = "relu"
+            # 1.generate basic params
+            batch_size, d_model, n_head, dim_feedforward, dropout, attn_dropout, act_dropout, sequence_length = generate_basic_params(
+                mode="encoder_layer")
+            # 2.generate input for encoder
+            src = np.random.rand(batch_size, sequence_length,
+                                 d_model).astype("float32")
+            src_mask = np.zeros((batch_size, n_head, sequence_length,
+                                 sequence_length)).astype("float32")
+            src_mask[0][0][0][0] = -np.inf
+
+            for cache in [True, False]:
+                # paddle
+                encoder_layer = TransformerEncoderLayer(d_model, n_head,
+                                                        dim_feedforward,
+                                                        dropout, ffn_fc1_act,
+                                                        attn_dropout,
+                                                        act_dropout)
+                cache_objs = None
+                if cache:
+                    cache_objs = encoder_layer.gen_cache(paddle.to_tensor(src))
+
+                encoder_output = encoder_layer(paddle.to_tensor(src),
+                                               paddle.to_tensor(src_mask),
+                                               cache_objs)
+                encoder_output = encoder_output[0].numpy(
+                ) if cache else encoder_output.numpy()
+
+                # 4.numpy:
+                residual = src
+                # paddle self attention
+                self_attn = MultiHeadAttention(d_model,
+                                               n_head,
+                                               dropout=attn_dropout)
+                attn_output = self_attn(paddle.to_tensor(src),
+                                        paddle.to_tensor(src),
+                                        paddle.to_tensor(src),
+                                        paddle.to_tensor(src_mask), cache_objs)
+                attn_output = attn_output[0].numpy(
+                ) if cache else attn_output.numpy()
+
+                src = attn_output + residual
+                src_norm = layer_norm(src, d_model, encoder_layer.norm1)
+                residual = src_norm
+
+                ffn_output = ffn(src_norm, encoder_layer, ffn_fc1_act)
+                src = residual + ffn_output
+                src = layer_norm(src, d_model, encoder_layer.norm2)
+
+                np.testing.assert_allclose(encoder_output,
+                                           src,
+                                           rtol=1e-5,
+                                           atol=1e-6)
 
     def test_transformer_decoder_layer(self):
         with fluid.dygraph.guard(fluid.CPUPlace()):
@@ -336,10 +419,12 @@ class TestTransformer(unittest.TestCase):
                                     source_length)).astype("float32")
             memory_mask[0][0][0][0] = -1e9
             for cache in [True, False]:
-                self_attn = MultiHeadAttention(
-                    d_model, n_head, dropout=attn_dropout)
-                cross_attn = MultiHeadAttention(
-                    d_model, n_head, dropout=attn_dropout)
+                self_attn = MultiHeadAttention(d_model,
+                                               n_head,
+                                               dropout=attn_dropout)
+                cross_attn = MultiHeadAttention(d_model,
+                                                n_head,
+                                                dropout=attn_dropout)
 
                 # paddle decoderlayer:
                 decoder_layer = TransformerDecoderLayer(
@@ -350,11 +435,11 @@ class TestTransformer(unittest.TestCase):
                     cache_objs = decoder_layer.gen_cache(
                         paddle.to_tensor(memory))
 
-                decoder_output = decoder_layer(
-                    paddle.to_tensor(tgt),
-                    paddle.to_tensor(memory),
-                    paddle.to_tensor(tgt_mask),
-                    paddle.to_tensor(memory_mask), cache_objs)
+                decoder_output = decoder_layer(paddle.to_tensor(tgt),
+                                               paddle.to_tensor(memory),
+                                               paddle.to_tensor(tgt_mask),
+                                               paddle.to_tensor(memory_mask),
+                                               cache_objs)
 
                 decoder_output = decoder_output[0].numpy(
                 ) if cache else decoder_output.numpy()
@@ -364,11 +449,9 @@ class TestTransformer(unittest.TestCase):
                 # self-attn
                 self_attn_cache = cache_objs[
                     0] if cache_objs is not None else None
-                tgt = self_attn(
-                    paddle.to_tensor(tgt),
-                    paddle.to_tensor(tgt),
-                    paddle.to_tensor(tgt),
-                    paddle.to_tensor(tgt_mask), self_attn_cache)
+                tgt = self_attn(paddle.to_tensor(tgt), paddle.to_tensor(tgt),
+                                paddle.to_tensor(tgt),
+                                paddle.to_tensor(tgt_mask), self_attn_cache)
 
                 tgt = tgt[0].numpy() if cache else tgt.numpy()
 
@@ -379,11 +462,11 @@ class TestTransformer(unittest.TestCase):
                 # cross-attn
                 cross_attn_cache = cache_objs[
                     1] if cache_objs is not None else None
-                tgt = cross_attn(
-                    paddle.to_tensor(tgt_norm),
-                    paddle.to_tensor(memory),
-                    paddle.to_tensor(memory),
-                    paddle.to_tensor(memory_mask), cross_attn_cache)
+                tgt = cross_attn(paddle.to_tensor(tgt_norm),
+                                 paddle.to_tensor(memory),
+                                 paddle.to_tensor(memory),
+                                 paddle.to_tensor(memory_mask),
+                                 cross_attn_cache)
                 tgt = tgt[0].numpy() if cache else tgt.numpy()
 
                 # postprocess
@@ -396,8 +479,10 @@ class TestTransformer(unittest.TestCase):
                 tgt = residual + ffn_output
                 tgt_norm = layer_norm(tgt, d_model, decoder_layer.norm3)
 
-                np.testing.assert_allclose(
-                    decoder_output, tgt_norm, rtol=1e-5, atol=1e-6)
+                np.testing.assert_allclose(decoder_output,
+                                           tgt_norm,
+                                           rtol=1e-5,
+                                           atol=1e-6)
 
     def test_encoder(self):
         batch_size, d_model, n_head, dim_feedforward, dropout, attn_dropout, act_dropout, sequence_length = generate_basic_params(
@@ -415,8 +500,34 @@ class TestTransformer(unittest.TestCase):
             num_layers = 6
             encoder = TransformerEncoder(encoder_layer, num_layers)
             # src, src_mask
-            enc_output = encoder(
-                paddle.to_tensor(src), paddle.to_tensor(src_mask))
+            enc_output = encoder(paddle.to_tensor(src),
+                                 paddle.to_tensor(src_mask))
+
+    def test_encoder_attr_1(self):
+        batch_size, d_model, n_head, dim_feedforward, dropout, attn_dropout, act_dropout, sequence_length = generate_basic_params(
+            mode="encoder_layer")
+
+        src = np.random.rand(batch_size, sequence_length,
+                             d_model).astype("float32")
+
+        src_mask = np.zeros((batch_size, n_head, sequence_length,
+                             sequence_length)).astype("float32")
+        src_mask[0][0][0][0] = -np.inf
+        with fluid.dygraph.guard(fluid.CPUPlace()):
+            for cache in [True, False]:
+                # paddle
+                encoder_layer = TransformerEncoderLayer(d_model, n_head,
+                                                        dim_feedforward,
+                                                        dropout)
+                num_layers = 6
+                encoder = TransformerEncoder(encoder_layer, num_layers)
+                cache_objs = None
+                if cache:
+                    cache_objs = encoder.gen_cache(paddle.to_tensor(src))
+
+                # src, src_mask
+                enc_output = encoder(paddle.to_tensor(src),
+                                     paddle.to_tensor(src_mask), cache_objs)
 
     def test_decoder(self):
         batch_size, d_model, n_head, dim_feedforward, dropout, _, _, source_length, target_length = generate_basic_params(
@@ -437,10 +548,9 @@ class TestTransformer(unittest.TestCase):
             num_layers = 6
             decoder = TransformerDecoder(decoder_layer, num_layers)
 
-            output = decoder(
-                paddle.to_tensor(tgt),
-                paddle.to_tensor(memory),
-                paddle.to_tensor(tgt_mask), paddle.to_tensor(memory_mask))
+            output = decoder(paddle.to_tensor(tgt), paddle.to_tensor(memory),
+                             paddle.to_tensor(tgt_mask),
+                             paddle.to_tensor(memory_mask))
 
     def test_transformer(self):
         batch_size, d_model, n_head, dim_feedforward, dropout, _, _, source_length, target_length = generate_basic_params(
@@ -448,17 +558,16 @@ class TestTransformer(unittest.TestCase):
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
         with fluid.dygraph.guard(fluid.CPUPlace()):
-            transformer = Transformer(
-                d_model,
-                n_head,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout)
+            transformer = Transformer(d_model,
+                                      n_head,
+                                      dim_feedforward=dim_feedforward,
+                                      dropout=dropout)
             src = paddle.to_tensor(
-                np.random.rand(batch_size, source_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, source_length,
+                               d_model).astype("float32"))
             tgt = paddle.to_tensor(
-                np.random.rand(batch_size, target_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, target_length,
+                               d_model).astype("float32"))
             src_mask = np.zeros((batch_size, n_head, source_length,
                                  source_length)).astype("float32")
             src_mask[0][0][0][0] = -np.inf
@@ -480,19 +589,18 @@ class TestTransformer(unittest.TestCase):
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
         with fluid.dygraph.guard(fluid.CPUPlace()):
-            transformer = Transformer(
-                d_model,
-                n_head,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                weight_attr=[None],
-                bias_attr=[False])
+            transformer = Transformer(d_model,
+                                      n_head,
+                                      dim_feedforward=dim_feedforward,
+                                      dropout=dropout,
+                                      weight_attr=[None],
+                                      bias_attr=[False])
             src = paddle.to_tensor(
-                np.random.rand(batch_size, source_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, source_length,
+                               d_model).astype("float32"))
             tgt = paddle.to_tensor(
-                np.random.rand(batch_size, target_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, target_length,
+                               d_model).astype("float32"))
             src_mask = np.zeros((batch_size, n_head, source_length,
                                  source_length)).astype("float32")
             src_mask[0][0][0][0] = -np.inf
@@ -514,19 +622,18 @@ class TestTransformer(unittest.TestCase):
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
         with fluid.dygraph.guard(fluid.CPUPlace()):
-            transformer = Transformer(
-                d_model,
-                n_head,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                weight_attr=[None, None],
-                bias_attr=[False, False])
+            transformer = Transformer(d_model,
+                                      n_head,
+                                      dim_feedforward=dim_feedforward,
+                                      dropout=dropout,
+                                      weight_attr=[None, None],
+                                      bias_attr=[False, False])
             src = paddle.to_tensor(
-                np.random.rand(batch_size, source_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, source_length,
+                               d_model).astype("float32"))
             tgt = paddle.to_tensor(
-                np.random.rand(batch_size, target_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, target_length,
+                               d_model).astype("float32"))
             src_mask = np.zeros((batch_size, n_head, source_length,
                                  source_length)).astype("float32")
             src_mask[0][0][0][0] = -np.inf
@@ -548,19 +655,18 @@ class TestTransformer(unittest.TestCase):
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
         with fluid.dygraph.guard(fluid.CPUPlace()):
-            transformer = Transformer(
-                d_model,
-                n_head,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                weight_attr=[None, None, None],
-                bias_attr=[False, False, True])
+            transformer = Transformer(d_model,
+                                      n_head,
+                                      dim_feedforward=dim_feedforward,
+                                      dropout=dropout,
+                                      weight_attr=[None, None, None],
+                                      bias_attr=[False, False, True])
             src = paddle.to_tensor(
-                np.random.rand(batch_size, source_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, source_length,
+                               d_model).astype("float32"))
             tgt = paddle.to_tensor(
-                np.random.rand(batch_size, target_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, target_length,
+                               d_model).astype("float32"))
             src_mask = np.zeros((batch_size, n_head, source_length,
                                  source_length)).astype("float32")
             src_mask[0][0][0][0] = -np.inf
@@ -582,18 +688,17 @@ class TestTransformer(unittest.TestCase):
 
         # batch_size, source_length, target_length, d_model, n_head = 4, 8, 8, 64, 8
         with fluid.dygraph.guard(fluid.CPUPlace()):
-            transformer = Transformer(
-                d_model,
-                n_head,
-                dim_feedforward=dim_feedforward,
-                dropout=dropout,
-                bias_attr=False)
+            transformer = Transformer(d_model,
+                                      n_head,
+                                      dim_feedforward=dim_feedforward,
+                                      dropout=dropout,
+                                      bias_attr=False)
             src = paddle.to_tensor(
-                np.random.rand(batch_size, source_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, source_length,
+                               d_model).astype("float32"))
             tgt = paddle.to_tensor(
-                np.random.rand(batch_size, target_length, d_model).astype(
-                    "float32"))
+                np.random.rand(batch_size, target_length,
+                               d_model).astype("float32"))
             src_mask = np.zeros((batch_size, n_head, source_length,
                                  source_length)).astype("float32")
             src_mask[0][0][0][0] = -np.inf
@@ -612,8 +717,9 @@ class TestTransformer(unittest.TestCase):
     def test_generate_square_subsequent_mask(self):
         length = 5
         d_model, n_head, dim_feedforward = 8, 4, 64
-        transformer = Transformer(
-            d_model, n_head, dim_feedforward=dim_feedforward)
+        transformer = Transformer(d_model,
+                                  n_head,
+                                  dim_feedforward=dim_feedforward)
         mask = transformer.generate_square_subsequent_mask(length)
 
 
