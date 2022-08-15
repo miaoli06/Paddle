@@ -33,7 +33,7 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return f"""#include "{header_file_path}"
+    return ("""#include "{}"
 
 #include <memory>
 
@@ -52,7 +52,7 @@ def source_include(header_file_path):
 #include "paddle/phi/infermeta/ternary.h"
 
 #include "paddle/fluid/platform/profiler/event_tracing.h"
-"""
+""").format(header_file_path)
 
 
 def api_namespace():

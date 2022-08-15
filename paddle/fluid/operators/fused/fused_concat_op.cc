@@ -63,7 +63,7 @@ class FusedSeqpoolConcatOp : public framework::OperatorWithKernel {
     out_dim = {-1, total_cols};
     for (size_t i = 0; i < num_inputs; ++i) {
       // input lod is not accessible here
-      outs_dims[i] = framework::make_ddim(out_dim);
+      outs_dims[i] = phi::make_ddim(out_dim);
     }
     ctx->SetOutputsDim("Out", outs_dims);
   }
@@ -170,7 +170,7 @@ class FusedConcatOp : public framework::OperatorWithKernel {
                           ins_dims.size()));
     std::vector<int64_t> out_dim;
     out_dim = {-1, length * input_nums};
-    ctx->SetOutputDim("Out", framework::make_ddim(out_dim));
+    ctx->SetOutputDim("Out", phi::make_ddim(out_dim));
   }
 
  protected:

@@ -126,7 +126,7 @@ class ScaledFCGradOpMaker : public framework::SingleGradOpMaker<T> {
 
 }  // namespace operators
 }  // namespace paddle
-
+using CPUCtx = phi::CPUContext;
 namespace ops = paddle::operators;
 //REGISTER_OPERATOR(scaled_fc, ops::ScaledFCOp, ops::ScaledFCOpMaker);
 REGISTER_OPERATOR(scaled_fc, ops::ScaledFCOp, ops::ScaledFCOpMaker,
@@ -136,5 +136,5 @@ REGISTER_OPERATOR(scaled_fc, ops::ScaledFCOp, ops::ScaledFCOpMaker,
 REGISTER_OPERATOR(scaled_fc_grad, ops::ScaledFCGradOp);
 
 REGISTER_OP_CPU_KERNEL(
-    scaled_fc, ops::ScaledFCKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::ScaledFCKernel<paddle::platform::CPUDeviceContext, double>);
+    scaled_fc, ops::ScaledFCKernel<CPUCtx, float>,
+    ops::ScaledFCKernel<CPUCtx, double>);

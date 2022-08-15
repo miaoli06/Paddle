@@ -23,7 +23,7 @@ from parse_utils import cross_validate, to_named_dict
 def main(forward_api_yaml_paths, backward_api_yaml_paths):
     apis = {}
     for api_yaml_path in chain(forward_api_yaml_paths, backward_api_yaml_paths):
-        with open(api_yaml_path, "rt", encoding="utf-8") as f:
+        with open(api_yaml_path, "rt") as f:
             api_list = yaml.safe_load(f)
             if api_list is not None:
                 apis.update(to_named_dict((api_list)))

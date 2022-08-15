@@ -154,7 +154,7 @@ class CrossNormHadamardGradOpMaker : public framework::SingleGradOpMaker<T> {
 
 }  // namespace operators
 }  // namespace paddle
-
+using CPUCtx = phi::CPUContext;
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(
     cross_norm_hadamard, ops::CrossNormHadamardOp,
@@ -166,5 +166,5 @@ REGISTER_OPERATOR(cross_norm_hadamard_grad, ops::CrossNormHadamardGradOp);
 
 REGISTER_OP_CPU_KERNEL(
     cross_norm_hadamard,
-    ops::CrossNormHadamardKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::CrossNormHadamardKernel<paddle::platform::CPUDeviceContext, double>);
+    ops::CrossNormHadamardKernel<CPUCtx, float>,
+    ops::CrossNormHadamardKernel<CPUCtx, double>);

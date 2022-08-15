@@ -136,10 +136,11 @@ int32_t MemorySparseTable::Load(const std::string& path,
 
   size_t feature_value_size =
       _value_accesor->GetAccessorInfo().size / sizeof(float);
-
+#if defined(PADDLE_WITH_MKLML)
   int thread_num = _real_local_shard_num < 15 ? _real_local_shard_num : 15;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (int i = 0; i < _real_local_shard_num; ++i) {
     FsChannelConfig channel_config;
     channel_config.path = file_list[file_start_idx + i];
@@ -220,10 +221,11 @@ int32_t MemorySparseTable::LoadPatch(const std::vector<std::string>& file_list,
       _value_accesor->GetAccessorInfo().size / sizeof(float);
   end_idx =
       end_idx < _m_sparse_table_shard_num ? end_idx : _m_sparse_table_shard_num;
+#if defined(PADDLE_WITH_MKLML)
   int thread_num = (end_idx - start_idx) < 15 ? (end_idx - start_idx) : 15;
-
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (size_t i = start_idx; i < end_idx; ++i) {
     FsChannelConfig channel_config;
     channel_config.path = file_list[i];
@@ -340,6 +342,7 @@ int32_t MemorySparseTable::Save(const std::string& dirname,
 
   size_t file_start_idx = _avg_local_shard_num * _shard_idx;
 
+#if defined(PADDLE_WITH_MKLML)
 #ifdef PADDLE_WITH_GPU_GRAPH
   int thread_num = _real_local_shard_num;
 #else
@@ -347,6 +350,7 @@ int32_t MemorySparseTable::Save(const std::string& dirname,
 #endif
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (int i = 0; i < _real_local_shard_num; ++i) {
     FsChannelConfig channel_config;
     if (_config.compress_in_save() && (save_param == 0 || save_param == 3)) {
@@ -435,12 +439,13 @@ int32_t MemorySparseTable::SavePatch(const std::string& path, int save_param) {
   std::string table_path = TableDir(path);
   _afs_client.remove(paddle::string::format_string(
       "%s/part-%03d-*", table_path.c_str(), _shard_idx));
-  int thread_num = _m_real_local_shard_num < 20 ? _m_real_local_shard_num : 20;
 
   std::atomic<uint32_t> feasign_size_all{0};
-
+#if defined(PADDLE_WITH_MKLML)
+  int thread_num = _m_real_local_shard_num < 20 ? _m_real_local_shard_num : 20;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (size_t i = 0; i < _m_real_local_shard_num; ++i) {
     FsChannelConfig channel_config;
     channel_config.path = paddle::string::format_string("%s/part-%03d-%05d",
@@ -535,7 +540,6 @@ int64_t MemorySparseTable::CacheShuffle(
   LOG(INFO) << "Table>> shuffle node num is: " << shuffle_node_num;
   // TODO(zhaocaibei123): check shuffle_node_num <= server_node_num
   size_t file_start_idx = _avg_local_shard_num * _shard_idx;
-  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
 
   std::vector<
       paddle::framework::ChannelWriter<std::pair<uint64_t, std::string>>>
@@ -550,9 +554,11 @@ int64_t MemorySparseTable::CacheShuffle(
     tmp_channels.push_back(
         paddle::framework::MakeChannel<std::pair<uint64_t, std::string>>());
   }
-
+#if defined(PADDLE_WITH_MKLML)
+  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (size_t i = 0; i < _real_local_shard_num; ++i) {
     paddle::framework::ChannelWriter<std::pair<uint64_t, std::string>>& writer =
         writers[i];

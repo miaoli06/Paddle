@@ -18,13 +18,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/operators/cross_norm_hadamard.cu.h"
 #include "paddle/fluid/operators/cross_norm_hadamard_op.h"
-#include "paddle/fluid/operators/math/blas.h"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #if defined(PADDLE_WITH_NCCL)
 #include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 #endif
 
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
@@ -50,16 +49,12 @@ class CrossNormHadamardCUDAKernel : public framework::OpKernel<T> {
     auto input_dims = input->dims();
     auto rows = input_dims[0];
 
-    auto& place = *ctx.template device_context<platform::CUDADeviceContext>()
-                       .eigen_device();
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto& dev_ctx = ctx.template device_context<GPUCtx>();
     auto stream = ctx.cuda_device_context().stream();
 
     Out->Resize({rows, cols});
     T* out_data = Out->mutable_data<T>(ctx.GetPlace());
-    //    auto out_eigen = framework::EigenVector<T>::Flatten(*Out);
-    //    out_eigen.device(place) = out_eigen.constant(static_cast<T>(0));
-    math::set_constant(dev_ctx, Out, static_cast<T>(0));
+    phi::funcs::set_constant(dev_ctx, Out, static_cast<T>(0));
 
     cuda_means->Resize({1, cols});
     cuda_scales->Resize({1, cols});
@@ -92,33 +87,22 @@ class CrossNormHadamardOpCUDAKernel : public framework::OpKernel<T> {
     auto* summary_grad =
         ctx.Output<Tensor>(framework::GradVarName("SummaryInput"));
 
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
-    //    auto& place = *ctx.template
-    //    device_context<platform::CUDADeviceContext>()
-    //                       .eigen_device();
+    auto& dev_ctx = ctx.template device_context<GPUCtx>();
     auto stream = ctx.cuda_device_context().stream();
 
     // initialize
     input_grad->mutable_data<T>(ctx.GetPlace());
-    math::set_constant(dev_ctx, input_grad, static_cast<T>(0));
-    //    auto input_grad_eigen =
-    //    framework::EigenVector<T>::Flatten(*input_grad);
-    //    input_grad_eigen.device(place) =
-    //        input_grad_eigen.constant(static_cast<T>(0));
+    phi::funcs::set_constant(dev_ctx, input_grad, static_cast<T>(0));
 
     summary_grad->mutable_data<T>(ctx.GetPlace());
-    math::set_constant(dev_ctx, summary_grad, static_cast<T>(0));
-    //    auto summary_grad_eigen =
-    //    framework::EigenVector<T>::Flatten(*summary_grad);
-    //    summary_grad_eigen.device(place) =
-    //        summary_grad_eigen.constant(static_cast<T>(0));
-
+    phi::funcs::set_constant(dev_ctx, summary_grad, static_cast<T>(0));
+    
     auto cols = (embed_dim * 3 + 1) * fields_num;
     auto input_dims = input->dims();
     auto rows = input_dims[0];
 
     // temperary tensor
-    math::Transpose<DeviceContext, T, 2> trans;
+    phi::funcs::Transpose<DeviceContext, T, 2> trans;
 
     Tensor input_help;
     input_help = ctx.AllocateTmpTensor<T, DeviceContext>(
@@ -155,7 +139,7 @@ class CrossNormHadamardOpCUDAKernel : public framework::OpKernel<T> {
     sum_offset[0] = 0;
 
     auto tmp_array = memory::Alloc(dev_ctx, sum_offset.size() * sizeof(int));
-    memory::Copy(BOOST_GET_CONST(platform::CUDAPlace, dev_ctx.GetPlace()),
+    memory::Copy(dev_ctx.GetPlace(),
                  tmp_array->ptr(), platform::CPUPlace(),
                  reinterpret_cast<void*>(sum_offset.data()),
                  sum_offset.size() * sizeof(int), dev_ctx.stream());
@@ -183,12 +167,12 @@ class CrossNormHadamardOpCUDAKernel : public framework::OpKernel<T> {
     if (need_sync_stats) {
 #if defined(PADDLE_WITH_NCCL)
       auto comm = platform::NCCLCommContext::Instance().Get(0, ctx.GetPlace());
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclAllReduce(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
           reinterpret_cast<const void*>(summary_grad->data<T>()),
           reinterpret_cast<void*>(summary_grad->data<T>()), C,
           platform::ToNCCLDataType(input->type()), ncclSum, comm->comm(),
           stream));
-      PADDLE_ENFORCE_CUDA_SUCCESS(cudaStreamSynchronize(stream));
+      PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 #else
       PADDLE_THROW(platform::errors::PreconditionNotMet(
           "PaddlePaddle should compile with GPU, and need_sync_stats connot be "
@@ -204,7 +188,6 @@ class CrossNormHadamardOpCUDAKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-using GPUCtx = paddle::platform::CUDADeviceContext;
 REGISTER_OP_CUDA_KERNEL(cross_norm_hadamard,
                         ops::CrossNormHadamardCUDAKernel<GPUCtx, float>,
                         ops::CrossNormHadamardCUDAKernel<GPUCtx, double>);

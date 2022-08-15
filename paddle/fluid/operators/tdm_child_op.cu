@@ -80,9 +80,9 @@ class TDMChildCUDAKernel : public framework::OpKernel<T> {
     auto *tree_info_var = ctx.InputVar("TreeInfo");
 
     auto &input_tensor = input_var->Get<LoDTensor>();
-    const auto &input_type = input_tensor.type();
-    bool input_type_match = input_type == framework::proto::VarType::INT32 ||
-                            input_type == framework::proto::VarType::INT64;
+    const auto &input_type = paddle::framework::TransToProtoVarType(input_tensor.type());
+    bool input_type_match = (input_type == framework::proto::VarType::INT32 ||
+                            input_type == framework::proto::VarType::INT64);
     PADDLE_ENFORCE_EQ(input_type_match, true,
                       platform::errors::InvalidArgument(
                           "Input(X) holds the wrong type, it holds %s, but "
@@ -94,9 +94,9 @@ class TDMChildCUDAKernel : public framework::OpKernel<T> {
                               framework::proto::VarType::INT64)));
 
     auto &tree_info_tensor = tree_info_var->Get<LoDTensor>();
-    const auto &info_type = tree_info_tensor.type();
-    bool info_type_match = info_type == framework::proto::VarType::INT32 ||
-                           info_type == framework::proto::VarType::INT64;
+    const auto &info_type = paddle::framework::TransToProtoVarType(tree_info_tensor.type());
+    bool info_type_match = (info_type == framework::proto::VarType::INT32 ||
+                           info_type == framework::proto::VarType::INT64);
     PADDLE_ENFORCE_EQ(
         info_type_match, true,
         platform::errors::InvalidArgument(
@@ -115,8 +115,8 @@ class TDMChildCUDAKernel : public framework::OpKernel<T> {
 
     auto output_type =
         static_cast<framework::proto::VarType::Type>(ctx.Attr<int>("dtype"));
-    bool out_type_match = output_type == framework::proto::VarType::INT32 ||
-                          output_type == framework::proto::VarType::INT64;
+    bool out_type_match = (output_type == framework::proto::VarType::INT32 ||
+                          output_type == framework::proto::VarType::INT64);
     PADDLE_ENFORCE_EQ(out_type_match, true,
                       platform::errors::InvalidArgument(
                           "Ouput(Child) & Output(LeafMask) holds the wrong "
@@ -153,11 +153,11 @@ class TDMChildCUDAKernel : public framework::OpKernel<T> {
 
 REGISTER_OP_CUDA_KERNEL(
     tdm_child,
-    paddle::operators::TDMChildCUDAKernel<paddle::platform::CUDADeviceContext,
+    paddle::operators::TDMChildCUDAKernel<phi::GPUContext,
                                           float>,
-    paddle::operators::TDMChildCUDAKernel<paddle::platform::CUDADeviceContext,
+    paddle::operators::TDMChildCUDAKernel<phi::GPUContext,
                                           double>,
-    paddle::operators::TDMChildCUDAKernel<paddle::platform::CUDADeviceContext,
+    paddle::operators::TDMChildCUDAKernel<phi::GPUContext,
                                           int>,
-    paddle::operators::TDMChildCUDAKernel<paddle::platform::CUDADeviceContext,
+    paddle::operators::TDMChildCUDAKernel<phi::GPUContext,
                                           int64_t>);

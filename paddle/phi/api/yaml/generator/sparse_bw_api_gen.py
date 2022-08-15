@@ -67,22 +67,24 @@ class SparseBackwardAPI(SparseAPI, BackwardAPI):
             inplace_assign = " = " + self.inplace_map[self.outputs['names'][
                 0]] if inplace_flag and self.inplace_map is not None and self.outputs[
                     'names'][0] in self.inplace_map else ""
-            output_create = f"""
-    auto kernel_out = SetSparseKernelOutput({self.outputs['names'][0]}, {output_type_map[out_dtype_list[0]]});"""
+            output_create = ("""
+    auto kernel_out = SetSparseKernelOutput({}, {});""").format(
+        self.outputs['names'][0], output_type_map[out_dtype_list[0]])
 
         elif len(out_dtype_list) > 1:
             output_create = ""
 
             for i, out_type_item in enumerate(out_dtype_list):
-                kernel_output.append(f'kernel_out_{i}')
-                output_names.append(f'kernel_out_{i}')
+                kernel_output.append(('kernel_out_{}').format(i))
+                output_names.append(('kernel_out_{}').format(i))
                 if inplace_flag and self.inplace_map is not None and self.outputs[
                         'names'][i] in self.inplace_map:
-                    output_create = output_create + f"""
-    *{self.outputs['names'][i]} = {self.inplace_map[self.outputs['names'][i]]};"""
+                    output_create = output_create + ("""
+    *{} = {};""").format(self.outputs['names'][i], self.inplace_map[self.outputs['names'][i]])
 
-                output_create = output_create + f"""
-    auto kernel_out_{i} = SetSparseKernelOutput({self.outputs['names'][i]}, {output_type_map[out_dtype_list[i]]});"""
+                output_create = output_create + ("""
+    auto kernel_out_{} = SetSparseKernelOutput({}, {});""").format(
+        i, self.outputs['names'][i], output_type_map[out_dtype_list[i]])
 
         else:
             raise ValueError(
@@ -102,8 +104,8 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return f"""
-#include "{header_file_path}"
+    return ("""
+#include "{}"
 #include <memory>
 
 #include "glog/logging.h"
@@ -113,7 +115,7 @@ def source_include(header_file_path):
 #include "paddle/phi/api/lib/kernel_dispatch.h"
 #include "paddle/phi/api/lib/sparse_api_custom_impl.h"
 #include "paddle/phi/core/kernel_registry.h"
-"""
+""").format(header_file_path)
 
 
 def api_namespace():

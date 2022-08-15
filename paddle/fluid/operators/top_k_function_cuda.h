@@ -1141,6 +1141,13 @@ bool SortTopk(const phi::GPUContext& ctx,
   return true;
 }
 
+const int CUDA_NUM_THREADS = platform::PADDLE_CUDA_NUM_THREADS;
+#define GET_BLOCK(N) ((N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS)
+
+#define CUDA_KERNEL_LOOP(i, n)                                  \
+  for (auto i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
+       i += blockDim.x * gridDim.x)
+
 template <typename T>
 struct MoreCompare {
   __inline__ __device__ bool compare(const T& a, const T& b) const {
@@ -1167,7 +1174,7 @@ __global__ void KernelSortTopK(const size_t num_rows, const T* input_val,
                                T* values, int64_t* indices,
                                const int64_t num_cols, const int K,
                                const Compare& op) {
-  for (int idx = blockIdx.x; idx < num_rows; idx += gridDim.x) {
+  CUDA_KERNEL_LOOP(idx, num_rows) {
     const T* in = &input_val[idx * num_cols];
     T* val = &values[idx * K];
     int64_t* ind = &indices[idx * K];
@@ -1207,7 +1214,7 @@ bool SortMinTopK(const phi::GPUContext& ctx,
   // one cols
   if (num_cols == 1) {
     // fill index
-    FillTopKValue<<<GET_BLOCKS(num_cols * num_rows), CUDA_NUM_THREADS, 0,
+    FillTopKValue<<<GET_BLOCK(num_cols * num_rows), CUDA_NUM_THREADS, 0,
                     cu_stream>>>((num_cols * num_rows), input_values, values,
                                  indices, num_cols);
     return true;
@@ -1216,11 +1223,11 @@ bool SortMinTopK(const phi::GPUContext& ctx,
   if (largest) {
     MoreCompare<T> op;
     // Sort TopK value
-    KernelSortTopK<<<GET_BLOCKS(num_rows), CUDA_NUM_THREADS, 0, cu_stream>>>(
+    KernelSortTopK<<<GET_BLOCK(num_rows), CUDA_NUM_THREADS, 0, cu_stream>>>(
         num_rows, input_values, values, indices, num_cols, K, op);
   } else {
     LessCompare<T> op;
-    KernelSortTopK<<<GET_BLOCKS(num_rows), CUDA_NUM_THREADS, 0, cu_stream>>>(
+    KernelSortTopK<<<GET_BLOCK(num_rows), CUDA_NUM_THREADS, 0, cu_stream>>>(
         num_rows, input_values, values, indices, num_cols, K, op);
   }
   return true;

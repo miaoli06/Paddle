@@ -579,6 +579,9 @@ inline void TensorToVector(const Tensor& src, std::vector<bool>* dst) {
 }
 
 std::ostream& operator<<(std::ostream& os, const LoD& lod);
+void TensorScaleValue(const platform::Place& place,
+                      const framework::Tensor& tensor, framework::Tensor* out,
+                      const float scale);
 
 }  // namespace framework
 }  // namespace paddle

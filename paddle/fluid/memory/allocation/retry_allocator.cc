@@ -16,10 +16,10 @@
 
 #include "glog/logging.h"
 
-PADDLE_DEFINE_EXPORTED_READONLY_int32(sample_max_bin_bytes, 2048, "sample max bytes in pool MB");
-PADDLE_DEFINE_EXPORTED_READONLY_int32(sample_bin_growth, 2, "sample growth memory by bin");
-PADDLE_DEFINE_EXPORTED_READONLY_int32(sample_min_bin, 8, "sample min bin number");
-PADDLE_DEFINE_EXPORTED_READONLY_bool(sample_debug_info, false, "sample print debug info");
+PADDLE_DEFINE_EXPORTED_int32(sample_max_bin_bytes, 2048, "sample max bytes in pool MB");
+PADDLE_DEFINE_EXPORTED_int32(sample_bin_growth, 2, "sample growth memory by bin");
+PADDLE_DEFINE_EXPORTED_int32(sample_min_bin, 8, "sample min bin number");
+PADDLE_DEFINE_EXPORTED_bool(sample_debug_info, false, "sample print debug info");
 
 namespace paddle {
 namespace memory {
@@ -103,7 +103,7 @@ phi::Allocation* RetryAllocator::AllocateImpl(size_t size) {
 }
 
 static const unsigned int INVALID_BIN = (unsigned int)-1;
-SampleAllocator::BlockDescriptor::BlockDescriptor(Allocation* ptr)
+SampleAllocator::BlockDescriptor::BlockDescriptor(phi::Allocation* ptr)
     : d_ptr(ptr), bytes(0), used(0), bin(INVALID_BIN) {}
 SampleAllocator::BlockDescriptor::BlockDescriptor()
     : d_ptr(NULL), bytes(0), used(0), bin(INVALID_BIN) {}
@@ -128,7 +128,7 @@ SampleAllocator::SampleAllocator(std::shared_ptr<Allocator> allocator)
                       "Underlying allocator of SampleAllocator is NULL"));
   VLOG(0) << "SampleAllocator init";
 }
-void SampleAllocator::FreeImpl(Allocation* allocation) {
+void SampleAllocator::FreeImpl(phi::Allocation* allocation) {
   if (allocation == NULL) {
     return;
   }
@@ -162,7 +162,7 @@ void SampleAllocator::FreeImpl(Allocation* allocation) {
   }
 }
 // alloc memory
-Allocation* SampleAllocator::AllocateImpl(size_t bytes) {
+phi::Allocation* SampleAllocator::AllocateImpl(size_t bytes) {
   // Create a block descriptor for the requested allocation
   bool found = false;
   BlockDescriptor search_key;

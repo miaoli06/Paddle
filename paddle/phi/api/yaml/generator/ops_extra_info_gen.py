@@ -19,17 +19,12 @@ import argparse
 
 
 def map_code_template(attrs_str):
-    return f"""
+    return """
 #include "paddle/fluid/framework/attribute.h"
-
 namespace paddle {{
-const static std::unordered_map<std::string, paddle::framework::AttributeMap> extra_attrs_map = {{
-{attrs_str}
-}};
-
+    const static std::unordered_map<std::string, paddle::framework::AttributeMap> extra_attrs_map = {{%s}};
 }}  // namespace paddle
-
-"""
+""" % (attrs_str)
 
 
 ATTR_TYPE_STRING_MAP = {
@@ -72,14 +67,14 @@ def generate_extra_info(api_compat_yaml_path, ops_extra_info_path):
                     attr_type, attr_name, default_val = parse_attr(attr)
                     if attr_type.startswith("std::vector"):
                         attr_map_list.append(
-                            f"{{\"{attr_name}\", {attr_type}{default_val}}}")
+                            ("{\"%s\", %s%s}" % (attr_name, attr_type, default_val)))
                     else:
                         attr_map_list.append(
-                            f"{{\"{attr_name}\", {attr_type}{{{default_val}}}}}"
+                            ("{{\"%s\", %s{{%s}}}}" % (attr_name, attr_type, default_val))
                         )
                 api_extra_attr_map = ", ".join(attr_map_list)
                 extra_map_str_list.append(
-                    f"{{\"{api_compat_args['api']}\", {{ {api_extra_attr_map} }}}}"
+                    ("{{\"%s\", {{ %s }}}}" % (api_compat_args['api'], api_extra_attr_map)) 
                 )
 
     ops_extra_info_file = open(ops_extra_info_path, 'w')

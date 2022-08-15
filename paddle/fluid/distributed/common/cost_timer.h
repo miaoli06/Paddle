@@ -24,7 +24,7 @@ namespace paddle {
 namespace distributed {
 
 struct CostProfilerNode {
-  std::shared_ptr<bvar::LatencyRecorder> recorder;
+  std::shared_ptr<brpc::bvar::LatencyRecorder> recorder;
 };
 
 class CostProfiler {
@@ -41,7 +41,7 @@ class CostProfiler {
     }
     auto profiler_node = std::make_shared<CostProfilerNode>();
     profiler_node->recorder.reset(
-        new bvar::LatencyRecorder("cost_profiler", label));
+        new brpc::bvar::LatencyRecorder("cost_profiler", label));
     _cost_profiler_map[label] = profiler_node;
   }
 

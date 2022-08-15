@@ -1136,7 +1136,9 @@ void BindEager(pybind11::module* module) {
   auto heap_type = reinterpret_cast<PyHeapTypeObject*>(
       PyType_Type.tp_alloc(&PyType_Type, 0));
   heap_type->ht_name = ToPyObject("Tensor");
+#if PY_VERSION_HEX >= 0x03050000
   heap_type->ht_qualname = ToPyObject("Tensor");
+#endif
   auto type = &heap_type->ht_type;
   type->tp_name = "Tensor";
   type->tp_basicsize = sizeof(TensorObject);
@@ -1149,8 +1151,10 @@ void BindEager(pybind11::module* module) {
   type->tp_init = TensorInit;
   type->tp_new = TensorNew;
   type->tp_weaklistoffset = offsetof(TensorObject, weakrefs);
+#if PY_VERSION_HEX >= 0x03050000
   Py_INCREF(&PyBaseObject_Type);
   type->tp_base = reinterpret_cast<PyTypeObject*>(&PyBaseObject_Type);
+#endif
   type->tp_flags |=
       Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HEAPTYPE;
 #if PY_VERSION_HEX >= 0x03050000
@@ -1185,7 +1189,9 @@ void BindEagerStringTensor(pybind11::module* module) {
   auto heap_type = reinterpret_cast<PyHeapTypeObject*>(
       PyType_Type.tp_alloc(&PyType_Type, 0));
   heap_type->ht_name = ToPyObject("StringTensor");
+#if PY_VERSION_HEX >= 0x03050000
   heap_type->ht_qualname = ToPyObject("StringTensor");
+#endif
   auto type = &heap_type->ht_type;
   type->tp_name = "StringTensor";
   type->tp_basicsize = sizeof(TensorObject);
@@ -1197,8 +1203,10 @@ void BindEagerStringTensor(pybind11::module* module) {
   type->tp_getset = string_tensor_variable_properties;
   type->tp_init = StringTensorInit;
   type->tp_new = TensorNew;
+#if PY_VERSION_HEX >= 0x03050000
   Py_INCREF(&PyBaseObject_Type);
   type->tp_base = reinterpret_cast<PyTypeObject*>(&PyBaseObject_Type);
+#endif
   type->tp_flags |=
       Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HEAPTYPE;
 #if PY_VERSION_HEX >= 0x03050000

@@ -29,7 +29,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                                    const int expand_embed_dim,
                                    const int skip_offset, bool expand_only) {
   //  VLOG(3) << "Begin PullSparse";
-  int device_id = BOOST_GET_CONST(platform::CUDAPlace, place).GetDeviceId();
+  int device_id = place.GetDeviceId();
   DeviceBoxData& dev = device_caches_[device_id];
   platform::Timer& all_timer = dev.all_pull_timer;
   platform::Timer& pull_boxps_timer = dev.boxps_pull_timer;
@@ -45,12 +45,12 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
   for (int i = 0; i < slot_num; i++) {
     total_length += slot_lengths[i];
     slot_lengths_lod.push_back(total_length);
-    }
+  }
   dev.total_key_length = total_length;
 
-  auto ctx = platform::DeviceContextPool::Instance().Get(
-      BOOST_GET_CONST(platform::CUDAPlace, place));
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(ctx)->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place))
+          ->stream();
 
   boxps::FeaturePullOffset* pull_offset = nullptr;
   if (dev.pull_offset.memory_size() == 0) {
@@ -278,17 +278,16 @@ void BoxWrapper::PushSparseGradCaseGPU(
     const std::vector<int64_t>& slot_lengths, const int hidden_size,
     const int expand_embed_dim, const int batch_size, const int skip_offset,
     bool expand_only) {
-  int device_id = BOOST_GET_CONST(platform::CUDAPlace, place).GetDeviceId();
+  int device_id = place.GetDeviceId();
   DeviceBoxData& dev = device_caches_[device_id];
   platform::Timer& all_timer = dev.all_push_timer;
   platform::Timer& push_boxps_timer = dev.boxps_push_timer;
 
   all_timer.Resume();
 
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place))
+          ->stream();
   uint64_t* total_keys =
       reinterpret_cast<uint64_t*>(dev.keys_tensor.data<int64_t>());
   int* total_dims = reinterpret_cast<int*>(dev.dims_tensor.data<int>());

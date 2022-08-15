@@ -26,7 +26,6 @@
 #include <vector>
 
 #include "google/protobuf/text_format.h"
-#include "gtest/gtest.h"
 #include "paddle/fluid/distributed/ps/service/env.h"
 #include "paddle/fluid/distributed/ps/service/graph_brpc_client.h"
 #include "paddle/fluid/distributed/ps/service/graph_brpc_server.h"

@@ -96,7 +96,7 @@ no_amp_list = [
 
 def FindParsingFunctionFromAttributeType(atype):
     if atype not in atype_to_parsing_function.keys():
-        assert False, f"Unable to find {atype} in atype_to_parsing_function."
+        assert False, ("Unable to find %s in atype_to_parsing_function." % (atype))
 
     return atype_to_parsing_function[atype]
 
@@ -430,11 +430,11 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
         dygraph_function_call_list = ["" for i in range(num_args)]
         amp_dygraph_function_call_list = ["" for i in range(num_args)]
         for name, (_, pos) in forward_inputs_position_map.items():
-            dygraph_function_call_list[pos] = f"{name}"
-            amp_dygraph_function_call_list[pos] = f"NEW_{name}"
+            dygraph_function_call_list[pos] = name
+            amp_dygraph_function_call_list[pos] = ("NEW_%s" % (name))
         for name, _, _, pos in orig_forward_attrs_list:
-            dygraph_function_call_list[pos] = f"{name}"
-            amp_dygraph_function_call_list[pos] = f"{name}"
+            dygraph_function_call_list[pos] = name
+            amp_dygraph_function_call_list[pos] = name
         dygraph_function_call_str = ",".join(dygraph_function_call_list)
         amp_dygraph_function_call_str = ",".join(amp_dygraph_function_call_list)
 
@@ -463,35 +463,35 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
             if IsVectorTensorType(ttype):
                 if is_optional:
                     amp_tensors_vector_optional_list.append(
-                        f"if ({name}.is_initialized()) amp_tensors_vector.push_back({name}.get());\n"
+                        ("if (%s.is_initialized()) amp_tensors_vector.push_back(%s.get());\n" % (name, name))
                     )
                     amp_autocast_optional_list.append(
-                        f"auto NEW_{name} = {name}.is_initialized() ? egr::EagerAmpAutoCast(\"{name}\", {name}, amp_dst_dtype, op_name, false) : {name};\n"
+                        ("auto NEW_%s = %s.is_initialized() ? egr::EagerAmpAutoCast(\"%s\", %s, amp_dst_dtype, op_name, false) : %s;\n" % (name, name, name, name, name))
                     )
                 else:
-                    amp_tensors_vector_list.append(f"{name}")
+                    amp_tensors_vector_list.append(name)
                     amp_autocast_list.append(
-                        f"auto NEW_{name} = egr::EagerAmpAutoCasts(\"{name}\", {name}, amp_dst_dtype, op_name, false);\n"
+                        ("auto NEW_%s = egr::EagerAmpAutoCasts(\"%s\", %s, amp_dst_dtype, op_name, false);\n" % (name, name, name))
                     )
             else:
                 if is_optional:
                     amp_tensors_vector_optional_list.append(
-                        f"if ({name}.is_initialized()) amp_tensors_vector.push_back({{{name}.get()}});\n"
+                        ("if (%s.is_initialized()) amp_tensors_vector.push_back({{%s.get()}});\n" % (name, name))
                     )
                     amp_autocast_optional_list.append(
-                        f"auto NEW_{name} = {name}.is_initialized() ? egr::EagerAmpAutoCast(\"{name}\", {name}, amp_dst_dtype, op_name, false) : {name};\n"
+                        ("auto NEW_%s = %s.is_initialized() ? egr::EagerAmpAutoCast(\"%s\", %s, amp_dst_dtype, op_name, false) : %s;\n" % (name, name, name, name, name))
                     )
                 else:
                     if forward_inplace_map and name in forward_inplace_map.keys(
                     ):
-                        amp_tensors_vector_list.append(f"{{{name}}}")
+                        amp_tensors_vector_list.append("{{%s}}" % (name))
                         amp_autocast_list.append(
-                            f"auto NEW_{name} = egr::EagerAmpAutoCast(\"{name}\", {name}, amp_dst_dtype, op_name, false);\n"
+                            ("auto NEW_%s = egr::EagerAmpAutoCast(\"%s\", %s, amp_dst_dtype, op_name, false);\n" % (name, name, name))
                         )
                     else:
-                        amp_tensors_vector_list.append(f"{{{name}}}")
+                        amp_tensors_vector_list.append("{{%s}}" % (name))
                         amp_autocast_list.append(
-                            f"auto NEW_{name} = egr::EagerAmpAutoCast(\"{name}\", {name}, amp_dst_dtype, op_name, false);\n"
+                            ("auto NEW_%s = egr::EagerAmpAutoCast(\"%s\", %s, amp_dst_dtype, op_name, false);\n" % (name, name, name))
                         )
         amp_tensors_vector_list_str = "{ " + ",".join(
             amp_tensors_vector_list) + " }"
@@ -501,8 +501,8 @@ class PythonCSingleFunctionGenerator(FunctionGeneratorBase):
             amp_autocast_list) + "        " + "    ".join(
                 amp_autocast_optional_list)
 
-        kernel_trans2_op_name_str = f"auto op_name = phi::TransToFluidOpName(\"{forward_api_name}\");"
-        amp_get_dst_dtype_str = f"auto amp_dst_dtype = egr::GetAmpDestDtype(op_name, amp_tensors_vector);\n"
+        kernel_trans2_op_name_str = ("auto op_name = phi::TransToFluidOpName(\"%s\");" % (forward_api_name))
+        amp_get_dst_dtype_str = "auto amp_dst_dtype = egr::GetAmpDestDtype(op_name, amp_tensors_vector);\n"
 
         noamp_dygraph_function_str = NOAMP_DYGRAPH_FUNCTION_TEMPLATE.format(
             fwd_function_name, dygraph_function_call_str, fwd_function_name,

@@ -171,7 +171,11 @@ int64_t CastPyArg2AttrLong(PyObject* obj, ssize_t arg_pos) {
 
 size_t CastPyArg2AttrSize_t(PyObject* obj, ssize_t arg_pos) {
   if (PyObject_CheckLongOrConvertToLong(&obj)) {
+#if PY_VERSION_HEX >= 0x03050000
     return PyLong_AsSize_t(obj);
+#else
+    return PyLong_AsSsize_t(obj);
+#endif
   } else {
     PADDLE_THROW(platform::errors::InvalidArgument(
         "argument (position %d) must be "
@@ -196,8 +200,13 @@ float CastPyArg2AttrFloat(PyObject* obj, ssize_t arg_pos) {
 std::string CastPyArg2AttrString(PyObject* obj, ssize_t arg_pos) {
   if (PyObject_CheckStr(obj)) {
     Py_ssize_t size;
+#if PY_VERSION_HEX >= 0x03050000
     const char* data;
     data = PyUnicode_AsUTF8AndSize(obj, &size);
+#else
+    char* data = NULL;
+    PyString_AsStringAndSize(PyUnicode_AsUTF8String(obj), &data, &size);
+#endif
     return std::string(data, static_cast<size_t>(size));
   } else {
     PADDLE_THROW(platform::errors::InvalidArgument(
@@ -359,7 +368,11 @@ std::vector<size_t> CastPyArg2VectorOfSize_t(PyObject* obj, size_t arg_pos) {
     for (Py_ssize_t i = 0; i < len; i++) {
       item = PyList_GetItem(obj, i);
       if (PyObject_CheckLongOrConvertToLong(&item)) {
+#if PY_VERSION_HEX >= 0x03050000
         result.emplace_back(PyLong_AsSize_t(item));
+#else
+        result.emplace_back(PyLong_AsSsize_t(item));
+#endif
       } else {
         PADDLE_THROW(platform::errors::InvalidArgument(
             "argument (position %d) must be "
@@ -558,6 +571,7 @@ paddle::CustomOpKernelContext CastPyArg2CustomOpKernelContext(PyObject* obj,
   }
 }
 PyObject* ToPyObject(bool value) {
+#if PY_VERSION_HEX >= 0x03050000
   if (value) {
     Py_INCREF(Py_True);
     return Py_True;
@@ -565,6 +579,11 @@ PyObject* ToPyObject(bool value) {
     Py_INCREF(Py_False);
     return Py_False;
   }
+#else
+  PyObject *obj = PyBool_FromLong((long)value);
+  Py_INCREF(obj);
+  return obj;
+#endif
 }
 
 PyObject* ToPyObject(int value) { return PyLong_FromLong(value); }

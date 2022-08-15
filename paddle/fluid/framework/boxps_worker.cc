@@ -22,12 +22,12 @@ limitations under the License. */
 #include "paddle/fluid/framework/trainer_desc.pb.h"
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/lodtensor_printer.h"
 
 #include "paddle/fluid/framework/details/nan_inf_utils.h"
 #include "paddle/fluid/platform/collective_helper.h"
-#include "paddle/fluid/platform/nccl_helper.h"
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
 
 DECLARE_bool(enable_sync_dense_moment);
 DECLARE_bool(check_nan_inf);
@@ -238,7 +238,7 @@ void BoxPSAsynDenseTable::AsyncUpdate() {
     for (size_t i = 1; i < merge_num; ++i) {
       ps_buffer_->Receive(&grad[i]);
     }
-    AutoWRLock ps_lock(&ps_lock_);
+    phi::AutoWRLock ps_lock(&ps_lock_);
     std::vector<std::future<void>> wait_futures;
     for (int64_t i = 0; i < thread_num_; ++i) {
       wait_futures.emplace_back(thread_pool->Run(
@@ -263,7 +263,7 @@ void BoxPSAsynDenseTable::PullDense(const platform::Place& place,
   // And will hang when the lock was removed
   //   ;
   // }
-  AutoRDLock ps_lock(&ps_lock_);
+  phi::AutoRDLock ps_lock(&ps_lock_);
   TensorCopy(*static_cast<const Tensor*>(&ps_), place,
              static_cast<Tensor*>(tensor));
 }
@@ -300,7 +300,7 @@ static const int DenseKStepALL = 2;
 void BoxPSWorker::Initialize(const TrainerDesc& desc) {
   dev_ctx_ = platform::DeviceContextPool::Instance().Get(place_);
   node_size_ = boxps::MPICluster::Ins().size();
-  device_num_ = platform::GetCUDADeviceCount();
+  device_num_ = platform::GetGPUDeviceCount();
 }
 
 void BoxPSWorker::SetDenseTable(BoxPSAsynDenseTable* dense) {
@@ -486,9 +486,9 @@ void BoxPSWorker::SyncParam(void) {
   auto box_ptr = BoxWrapper::GetInstance();
   box_ptr->DenseNcclTimer(device_id_, false, 0x03);
   auto comm = platform::NCCLCommContext::Instance().Get(0, device_id_);
-  auto stream = static_cast<platform::CUDADeviceContext*>(dev_ctx_)->stream();
+  auto stream = static_cast<phi::GPUContext*>(dev_ctx_)->stream();
 
-  PADDLE_ENFORCE_CUDA_SUCCESS(cudaStreamSynchronize(stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   box_ptr->DenseNcclTimer(device_id_, true, 0x02);
 
   int64_t numel = param_sync_.numel();
@@ -500,23 +500,23 @@ void BoxPSWorker::SyncParam(void) {
     int part_param_len = numel / device_num_;
     float* recv_ptr = &sendbuff[device_id_ * part_param_len];
 
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclGroupStart());
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclReduceScatter(
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupStart());
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclReduceScatter(
         sendbuff, recv_ptr, part_param_len, ncclFloat32, ncclSum, comm->comm(),
         stream));
     CHECK(box_ptr->SyncDense(stream, part_param_len, recv_ptr, recv_ptr,
                              device_id_, false));
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclGroupEnd());
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclAllGather(
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupEnd());
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllGather(
         recv_ptr, sendbuff, part_param_len, ncclFloat32, comm->comm(), stream));
   } else if (sync_mode_ == DenseKStepALL) {  // KStep ALL
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::ncclAllReduce(
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
         sendbuff, sendbuff, numel, ncclFloat32, ncclSum, comm->comm(), stream));
   } else {
   }
   const float scale = 1.0 / (device_num_ * node_size_);
   TensorScaleValue(place_, param_sync_, &param_sync_, scale);
-  PADDLE_ENFORCE_CUDA_SUCCESS(cudaStreamSynchronize(stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   box_ptr->DenseNcclTimer(device_id_, true, 0x01);
 }
 int BoxPSWorker::PackBatchTask(void) {
@@ -572,13 +572,13 @@ void BoxPSWorker::TrainFiles() {
         SyncParam();
       }
     }
-    if (FLAGS_check_nan_inf) {
-      // check nan result
-      if (framework::details::CheckBatchNanOrInfRet(place_)) {
-        framework::details::DumpAllScope(*thread_scope_, place_);
-        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
-      }
-    }
+//    if (FLAGS_check_nan_inf) {
+//      // check nan result
+//      if (framework::details::CheckBatchNanOrInfRet(place_)) {
+//        framework::details::DumpAllScope(*thread_scope_, place_);
+//        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
+//      }
+//    }
     AddAucMonitor(thread_scope_, place_);
 
     accum_num += batch_size;
@@ -714,13 +714,13 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     dev_ctx_->Wait();
     cal_timer.Pause();
 
-    if (FLAGS_check_nan_inf) {
-      // check nan result
-      if (framework::details::CheckBatchNanOrInfRet(place_)) {
-        framework::details::DumpAllScope(*thread_scope_, place_);
-        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
-      }
-    }
+//    if (FLAGS_check_nan_inf) {
+//      // check nan result
+//      if (framework::details::CheckBatchNanOrInfRet(place_)) {
+//        framework::details::DumpAllScope(*thread_scope_, place_);
+//        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
+//      }
+//    }
 
     AddAucMonitor(thread_scope_, place_);
 

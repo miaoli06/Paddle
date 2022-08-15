@@ -189,5 +189,36 @@ void SerializeToStream(std::ostream& os, const LoDTensor& tensor);
 
 void DeserializeFromStream(std::istream& os, LoDTensor* tensor);
 
+
+class GPULodVector {
+public:
+    GPULodVector() : holder_(nullptr) {}
+    template<typename T>
+    T* mutable_data(const paddle::platform::Place &place, const std::vector<T> &vec) {
+        auto stream = dynamic_cast<phi::GPUContext*>(
+                      platform::DeviceContextPool::Instance().Get(place))
+                      ->stream();
+        size_t total_bytes = vec.size() * sizeof(T);
+        if (holder_ == nullptr) {
+            holder_ = memory::AllocShared(place, total_bytes);
+        } else if (holder_->size() < total_bytes) {
+            holder_.reset();
+            holder_ = memory::AllocShared(place, total_bytes);
+        }
+        cudaMemcpyAsync(holder_->ptr(), vec.data(),
+               vec.size() * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        return reinterpret_cast<T *>(holder_->ptr());
+    }
+    template<typename T>
+    T *data(void) {
+        if (holder_ == nullptr) {
+            return nullptr;
+        }
+        return reinterpret_cast<T *>(holder_->ptr());
+    }
+private:
+    std::shared_ptr<memory::Allocation> holder_;
+};
+
 }  // namespace framework
 }  // namespace paddle

@@ -15,9 +15,10 @@ limitations under the License. */
 #pragma once
 #include <memory.h>
 #include "cub/cub.cuh"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 
 #define NORM_POS(idx, row, col) (((idx)*block_cols + (col)) * ins_num + (row))
 #define SCALE_MEAN_POS(idx, col) ((idx)*block_cols + (col))
@@ -35,6 +36,7 @@ const int CUDA_NUM_THREADS = paddle::platform::PADDLE_CUDA_NUM_THREADS;
 static inline int GET_BLOCKS(const int N) {
   return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
 }
+using GPUCtx = phi::GPUContext;
 namespace paddle {
 namespace operators {
 
@@ -181,7 +183,7 @@ void nncross_norm_bp(int N, int embed_dim, int ins_num, const T* inputs,
                      const T squared_sum_epsilon, cudaStream_t stream,
                      T* sum_grad_buf, int* sum_offset, T* sum_grad_buf2,
                      const framework::ExecutionContext& ctx) {
-  auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+  auto& dev_ctx = ctx.template device_context<GPUCtx>();
   int norm_cols = N * (embed_dim * 3 + 1);
   int intput_cols = N * embed_dim;
 

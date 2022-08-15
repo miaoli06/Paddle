@@ -124,6 +124,12 @@ class Blas {
             T* C,
             int ldc) const;
 
+  template <typename T>
+  void GEMM(CBLAS_TRANSPOSE transA,
+            CBLAS_TRANSPOSE transB,
+            int M, int N, int K,
+            float alpha, const T* A, const T* B, float beta, float* C, int flag) const;
+
 #ifdef PADDLE_WITH_MKLML  // @{ Group MKLML: class Blas
   template <typename T>
   T* GEMM_ALLOC(const CBLAS_IDENTIFIER id,

@@ -65,7 +65,7 @@ yaml_types_mapping = {
 ###  File Reader Helpers  ###
 #############################
 def AssertMessage(lhs_str, rhs_str):
-    return f"lhs: {lhs_str}, rhs: {rhs_str}"
+    return ("lhs: %s, rhs: %s" % (lhs_str, rhs_str))
 
 
 def ReadFwdFile(filepath):
@@ -160,11 +160,11 @@ def GetGradNodeName(string):
     string = str2Hump(string)
     if string.rfind("Grad") == (len(string) - 4):
         string = string[:-4]
-    return f"{string}GradNodeFinal"
+    return ("%sGradNodeFinal" % (string))
 
 
 def GetDygraphForwardFunctionName(string):
-    return f"{string}_final_state_dygraph_function"
+    return ("%s_final_state_dygraph_function" % (string))
 
 
 def GetIntermediateAPIFunctionName(string):
@@ -172,11 +172,11 @@ def GetIntermediateAPIFunctionName(string):
 
 
 def GetAutoGradMetaName(string):
-    return f"{string}_autograd_meta"
+    return ("%s_autograd_meta" % (string))
 
 
 def GetAutoGradMetaVectorName(string):
-    return f"{string}_autograd_meta_vec"
+    return ("%s_autograd_meta_vec" % (string))
 
 
 def RemoveSpecialSymbolsInName(string):
@@ -197,7 +197,7 @@ def GetInplacedFunctionName(function_name):
 
 
 def GetForwardFunctionName(string):
-    return f"{string}_final_state_dygraph_function"
+    return ("%s_final_state_dygraph_function" % (string))
 
 
 def GetIndent(num):
@@ -219,7 +219,7 @@ def ParseYamlArgs(string):
     args = [x.strip() for x in string.strip().split(",")]
     atype = r'((const )?\S+) '
     aname = r'(.*)'
-    pattern = f'{atype}{aname}'
+    pattern = ('%s%s' % (atype, aname))
     for i in range(len(args)):
         arg = args[i]
         m = re.search(pattern, arg)
@@ -229,9 +229,9 @@ def ParseYamlArgs(string):
             m.group(3).split("=")) > 1 else None
 
         assert arg_type in yaml_types_mapping.keys(
-        ), f"The argument type {arg_type} in yaml config is not supported in yaml_types_mapping."
+        ), "The argument type %s in yaml config is not supported in yaml_types_mapping." % (arg_type)
         if arg_type in ["DataType", "DataLayout"] and default_value is not None:
-            default_value = f"paddle::experimental::{default_value}"
+            default_value = ("paddle::experimental::%s" % (default_value))
         arg_type = yaml_types_mapping[arg_type]
 
         arg_name = RemoveSpecialSymbolsInName(arg_name)
@@ -267,7 +267,7 @@ def ParseYamlReturns(string):
             ret_type = ret.strip()
 
         assert ret_type in yaml_types_mapping.keys(
-        ), f"The return type {ret_type} in yaml config is not supported in yaml_types_mapping."
+        ), "The return type %s in yaml config is not supported in yaml_types_mapping." % (ret_type)
         ret_type = yaml_types_mapping[ret_type]
 
         assert "Tensor" in ret_type, AssertMessage("Tensor", ret_type)
@@ -284,7 +284,7 @@ def ParseYamlForwardFromBackward(string):
     wspace = r'\s*'
     fargs = r'(.*?)'
     frets = r'(.*)'
-    pattern = f'{fname}{wspace}\({wspace}{fargs}{wspace}\){wspace}->{wspace}{frets}'
+    pattern = ('%s%s\(%s%s%s\)%s->%s%s' % (fname, wspace, wspace, fargs, wspace, wspace, wspace, frets))
 
     m = re.search(pattern, string)
     function_name = m.group(1)
@@ -303,7 +303,7 @@ def ParseYamlForward(args_str, returns_str):
 
     fargs = r'(.*?)'
     wspace = r'\s*'
-    args_pattern = f'^\({fargs}\)$'
+    args_pattern = ('^\(%s\)$' % (fargs))
     args_str = re.search(args_pattern, args_str.strip()).group(1)
 
     inputs_list, attrs_list = ParseYamlArgs(args_str)
@@ -318,7 +318,7 @@ def ParseYamlBackward(args_str, returns_str):
 
     fargs = r'(.*?)'
     wspace = r'\s*'
-    args_pattern = f'\({fargs}\)'
+    args_pattern = ('\(%s\)' % (fargs))
     args_str = re.search(args_pattern, args_str).group(1)
 
     inputs_list, attrs_list = ParseYamlArgs(args_str)
@@ -347,7 +347,7 @@ def ParseYamlInplaceInfo(string):
 ########################
 ###  Generator Base  ###
 ########################
-class FunctionGeneratorBase:
+class FunctionGeneratorBase(object):
 
     def __init__(self, forward_api_contents, namespace):
         self.forward_api_contents = forward_api_contents

@@ -19,8 +19,8 @@
 #include <numeric>
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/lod_tensor.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace framework {
@@ -873,52 +873,6 @@ __global__ void PushMergeCopyVariableAtomic(
     }
   }
 }
-__device__ void add_calculator_value(const int table_size, const float pred,
-                                     const int64_t label, const int idx,
-                                     double* positive, double* negative,
-                                     double* abs_error, double* sqr_error,
-                                     double* local_pred) {
-  int pos = static_cast<int>(pred * table_size);
-  if (pos >= table_size) {
-    pos = table_size - 1;
-  }
-  if (label == 0) {
-    // atomicAdd(negative + pos, 1.0);
-    paddle::platform::CudaAtomicAdd(negative + pos, 1.0);
-  } else {
-    // atomicAdd(positive + pos, 1.0);
-    paddle::platform::CudaAtomicAdd(positive + pos, 1.0);
-  }
-  double err = pred - label;
-  abs_error[idx] += fabs(err);
-  sqr_error[idx] += err * err;
-  local_pred[idx] += pred;
-}
-
-__global__ void AddBasicCalculator(const float* pred, const int64_t* label,
-                                   double* positive, double* negative,
-                                   double* abs_error, double* sqr_error,
-                                   double* local_pred, int len,
-                                   int table_size) {
-  CUDA_KERNEL_LOOP(ins_idx, len) {
-    add_calculator_value(table_size, pred[ins_idx], label[ins_idx], ins_idx,
-                         positive, negative, abs_error, sqr_error, local_pred);
-  }
-}
-
-__global__ void AddMaskCalculator(const float* pred, const int64_t* label,
-                                  const int64_t* mask, double* positive,
-                                  double* negative, double* abs_error,
-                                  double* sqr_error, double* local_pred,
-                                  int len, int table_size) {
-  CUDA_KERNEL_LOOP(ins_idx, len) {
-    if (mask[ins_idx] != 1) {
-      continue;
-    }
-    add_calculator_value(table_size, pred[ins_idx], label[ins_idx], ins_idx,
-                         positive, negative, abs_error, sqr_error, local_pred);
-  }
-}
 template <typename TEmbedxOp>
 inline void FeaturePullCopy(
     const TEmbedxOp& op, const boxps::FeaturePullOffset* info,
@@ -995,10 +949,9 @@ void BoxWrapper::CopyForPull(
     const int slot_num, const int* key2slot, const int hidden_size,
     const int expand_embed_dim, const int64_t total_length, int* total_dims,
     const int skip_offset, bool expand_only, const uint32_t* gpu_restore_idx) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place))
+          ->stream();
   const int cvm_offset = cvm_offset_ - skip_offset;
   if (pull_info_.is_quant) {
     EmbedxQuantOp op;
@@ -1058,10 +1011,9 @@ void BoxWrapper::CopyKeys(const paddle::platform::Place& place,
                           uint64_t** origin_keys, uint64_t* total_keys,
                           const int64_t* slot_lens, int slot_num, int total_len,
                           int* key2slot) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place))
+          ->stream();
   CopyKeysKernel<<<CUDA_BLOCK(total_len), stream>>>(
       total_len, origin_keys, total_keys, slot_lens, slot_num, key2slot);
   cudaStreamSynchronize(stream);
@@ -1223,10 +1175,9 @@ void BoxWrapper::CopyForPush(
     bool expand_only, const uint32_t* gpu_sort_idx,
     const uint32_t* gpu_sort_offset, const uint32_t* gpu_sort_lens,
     const uint32_t* gpu_restore_idx) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place))
+          ->stream();
   const int cvm_offset = cvm_offset_ - skip_offset;
   if (expand_embed_dim > 0 && pull_info_.expand_size > 0) {  // nncross
     FeaturePushCopyNNCross(
@@ -1256,45 +1207,6 @@ void BoxWrapper::CopyForPush(
   cudaStreamSynchronize(stream);
 }
 
-void BasicAucCalculator::cuda_add_data(const paddle::platform::Place& place,
-                                       const int64_t* label, const float* pred,
-                                       int len) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
-
-  int i = BOOST_GET_CONST(platform::CUDAPlace, place).GetDeviceId();
-
-  cudaSetDevice(i);
-
-  AddBasicCalculator<<<CUDA_BLOCK(len), stream>>>(
-      pred, label, reinterpret_cast<double*>(_d_positive[i]->ptr()),
-      reinterpret_cast<double*>(_d_negative[i]->ptr()),
-      reinterpret_cast<double*>(_d_abserr[i]->ptr()),
-      reinterpret_cast<double*>(_d_sqrerr[i]->ptr()),
-      reinterpret_cast<double*>(_d_pred[i]->ptr()), len, _table_size);
-}
-
-void BasicAucCalculator::cuda_add_mask_data(
-    const paddle::platform::Place& place, const int64_t* label,
-    const float* pred, const int64_t* mask, int len) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
-  int i = BOOST_GET_CONST(platform::CUDAPlace, place).GetDeviceId();
-
-  cudaSetDevice(i);
-
-  AddMaskCalculator<<<CUDA_BLOCK(len), stream>>>(
-      pred, label, mask, reinterpret_cast<double*>(_d_positive[i]->ptr()),
-      reinterpret_cast<double*>(_d_negative[i]->ptr()),
-      reinterpret_cast<double*>(_d_abserr[i]->ptr()),
-      reinterpret_cast<double*>(_d_sqrerr[i]->ptr()),
-      reinterpret_cast<double*>(_d_pred[i]->ptr()), len, _table_size);
-}
-
 __global__ void pull_cache_value_kernel(int len, int dim, uint64_t* key,
                                         float* val, float* table) {
   CUDA_KERNEL_LOOP(i, len) { val[i] = table[key[i / dim] * dim + i % dim]; }
@@ -1303,9 +1215,9 @@ __global__ void pull_cache_value_kernel(int len, int dim, uint64_t* key,
 void GpuReplicaCache::PullCacheValue(uint64_t* d_keys, float* d_vals, int num,
                                      int gpu_id) {
   auto place = platform::CUDAPlace(gpu_id);
-  auto stream = dynamic_cast<platform::CUDADeviceContext*>(
-                    platform::DeviceContextPool::Instance().Get(place))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place))
+          ->stream();
   int len = emb_dim_ * num;
   pull_cache_value_kernel<<<CUDA_BLOCK(len), stream>>>(len, emb_dim_, d_keys,
                                                        d_vals, d_embs_[gpu_id]);

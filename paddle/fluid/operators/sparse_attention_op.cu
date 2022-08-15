@@ -879,12 +879,14 @@ class SparseAttentionGradCUDAKernel : public framework::OpKernel<T> {
 
 }  // namespace operators
 }  // namespace paddle
+namespace ops = paddle::operators;
+using GPUCtx = phi::GPUContext;
 REGISTER_OP_CUDA_KERNEL(
     sparse_attention,
-    ops::SparseAttentionCUDAKernel<plf::phi::GPUContext, float>,
-    ops::SparseAttentionCUDAKernel<plf::phi::GPUContext, double>);
+    ops::SparseAttentionCUDAKernel<GPUCtx, float>,
+    ops::SparseAttentionCUDAKernel<GPUCtx, double>);
 
 REGISTER_OP_CUDA_KERNEL(
     sparse_attention_grad,
-    ops::SparseAttentionGradCUDAKernel<plf::phi::GPUContext, float>,
-    ops::SparseAttentionGradCUDAKernel<plf::phi::GPUContext, double>);
+    ops::SparseAttentionGradCUDAKernel<GPUCtx, float>,
+    ops::SparseAttentionGradCUDAKernel<GPUCtx, double>);

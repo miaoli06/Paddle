@@ -69,9 +69,9 @@ class ForwardAPI(BaseAPI):
                     in_val = result.group('in')
                     out_val = result.group('out')
                     assert in_val in self.inputs['names'], \
-                        f"{self.api} : {mode} input error: the input var name('{in_val}') is not found in the input args of {self.api}."
+                        ("{} : {} input error: the input var name('{}') is not found in the input args of {}.").format(self.api, mode, in_val, self.api)
                     assert out_val in self.outputs['names'], \
-                        f"{self.api} : {mode} output error: the output var name('{out_val}') is not found in the output args of {self.api}."
+                        ("{} : {} output error: the output var name('{}') is not found in the output args of {}.").format(self.api, mode, out_val, self.api)
 
                     if mode == 'inplace':
                         inplace_map[out_val] = in_val
@@ -125,10 +125,10 @@ class ForwardAPI(BaseAPI):
                 if name.split('@')[0] not in self.intermediate_outs:
                     return_out_list.append(i)
             if len(return_out_list) == 1:
-                return f"return std::get<{return_out_list[0]}>(api_output);"
+                return ("return std::get<{}>(api_output);").format(return_out_list[0])
             else:
                 selected_code = [
-                    f"std::get<{i}>(api_output)" for i in return_out_list
+                    ("std::get<{}>(api_output)").format(i) for i in return_out_list
                 ]
             return 'return {' + ", ".join(selected_code) + '};'
 
@@ -148,34 +148,35 @@ class ForwardAPI(BaseAPI):
             inplace_assign = " = " + self.inplace_map[
                 self.outputs['names'][0]] if inplace_flag and self.outputs[
                     'names'][0] in self.inplace_map else ""
-            output_create = f"""
-{code_indent}  {return_type} api_output{inplace_assign};"""
+            output_create = ("""
+{}  {} api_output{};""").format(code_indent, return_type, inplace_assign)
             set_out_func = 'SetKernelOutput' if out_tensor_type_list is None or out_tensor_type_list[
                 0] == 'dense' else 'SetSelectedRowsKernelOutput'
             if return_type == 'std::vector<Tensor>':
                 assert self.outputs['out_size_expr'][0] is not None, \
-                     f"{self.api}: The out size expr : '{{expr}}' should be set when output has Tensor[]. You can refer 'split' api."
-                output_create = output_create + f"""
-{code_indent}  auto kernel_out = {set_out_func}({self.outputs['out_size_expr'][0]}, kernel_backend, &api_output);"""
+                     ("{}: The out size expr : '{{}}' should be set when output has Tensor[]. You can refer 'split' api.").format(self.api, expr)
+                output_create = output_create + ("""
+{}  auto kernel_out = {}({}, kernel_backend, &api_output);""").format(code_indent, set_out_func, self.outputs['out_size_expr'][0])
 
             else:
-                output_create = output_create + f"""
-{code_indent}  auto kernel_out = {set_out_func}(kernel_backend, &api_output);"""
+                output_create = output_create + ("""
+{}  auto kernel_out = {}(kernel_backend, &api_output);""").format(code_indent, set_out_func)
 
             if not inplace_flag and self.view_map is not None and self.outputs[
                     'names'][0] in self.view_map:
-                output_create = output_create + f"""
-{code_indent}  kernel_out->ShareBufferWith(*{PREFIX_TENSOR_NAME}{self.view_map[self.outputs['names'][0]]});
-{code_indent}  kernel_out->ShareInplaceVersionCounterWith(*{PREFIX_TENSOR_NAME}{self.view_map[self.outputs['names'][0]]});
-{code_indent}  VLOG(3) << "Perform View between Output and Input Tensor, share allocation and inplace version.";"""
+                output_create = output_create + ("""
+{}  kernel_out->ShareBufferWith(*{PREFIX_TENSOR_NAME}{});
+{}  kernel_out->ShareInplaceVersionCounterWith(*{PREFIX_TENSOR_NAME}{});
+{}  VLOG(3) << "Perform View between Output and Input Tensor, share allocation and inplace version.";""").format(
+    code_indent, self.view_map[self.outputs['names'][0]], code_indent, self.view_map[self.outputs['names'][0]], code_indent)
 
         elif len(out_dtype_list) > 1:
-            output_create = f"""
-{code_indent}  {return_type} api_output;"""
+            output_create = ("""
+{}  {} api_output;""").format(code_indent, return_type)
 
             if inplace_flag:
-                output_create = f"""
-{code_indent}  {return_type} api_output{{"""
+                output_create = ("""
+{}  {} api_output{{""").format(code_indent, return_type)
 
                 for out_name in self.outputs['names']:
                     if out_name in self.inplace_map:
@@ -186,33 +187,35 @@ class ForwardAPI(BaseAPI):
                 output_create = output_create[:-2] + '};'
 
             for i in range(len(out_dtype_list)):
-                kernel_output.append(f'kernel_out_{i}')
-                output_names.append(f'kernel_out_{i}')
+                kernel_output.append(('kernel_out_{}').format(i))
+                output_names.append(('kernel_out_{}').format(i))
                 set_out_func = 'SetKernelOutput' if out_tensor_type_list is None or out_tensor_type_list[
                     i] == 'dense' else 'SetSelectedRowsKernelOutput'
 
-                get_out_code = f"&std::get<{i}>(api_output)"
+                get_out_code = ("&std::get<{}>(api_output)").format(i)
                 if self.outputs['names'][
                         i] in self.inplace_map and self.inplace_map[
                             self.outputs['names'][i]] in self.optional_vars:
-                    get_out_code = f"std::get<{i}>(api_output).get_ptr()"
+                    get_out_code = ("std::get<{}>(api_output).get_ptr()").format(i)
 
                 if out_dtype_list[i] == 'std::vector<Tensor>':
                     assert self.outputs['out_size_expr'][i] is not None, \
-                        f"{self.api}: The out size expr : '{{expr}}' should be set when output has Tensor[]. You can refer 'split' api."
-                    output_create = output_create + f"""
-{code_indent}  auto kernel_out_{i} = {set_out_func}({self.outputs['out_size_expr'][i]}, kernel_backend, {get_out_code});"""
+                        ("{}: The out size expr : '{{}}' should be set when output has Tensor[]. You can refer 'split' api.").format(self.api, expr)
+                    output_create = output_create + ("""
+{}  auto kernel_out_{} = {}({}, kernel_backend, {});""").format(code_indent, i, set_out_func, self.outputs['out_size_expr'][i], get_out_code)
 
                 else:
-                    output_create = output_create + f"""
-{code_indent}  auto kernel_out_{i} = {set_out_func}(kernel_backend, {get_out_code});"""
+                    output_create = output_create + ("""
+{}  auto kernel_out_{} = {}(kernel_backend, {});""").format(code_indent, i, set_out_func, get_out_code)
 
                 if not inplace_flag and self.view_map is not None and self.outputs[
                         'names'][i] in self.view_map:
-                    output_create = output_create + f"""
-{code_indent}  kernel_out_{i}->ShareBufferWith(*{PREFIX_TENSOR_NAME}{self.view_map[self.outputs['names'][i]]});
-{code_indent}  kernel_out_{i}->ShareInplaceVersionCounterWith(*{PREFIX_TENSOR_NAME}{self.view_map[self.outputs['names'][i]]});
-{code_indent}  VLOG(3) << "Perform View between Output and Input Tensor, share allocation and inplace version.";"""
+                    output_create = output_create + ("""
+{}  kernel_out_{}->ShareBufferWith(*{}{});
+{}  kernel_out_{}->ShareInplaceVersionCounterWith(*{}{});
+{}  VLOG(3) << "Perform View between Output and Input Tensor, share allocation and inplace version.";""").format(
+    code_indent, i, PREFIX_TENSOR_NAME, self.view_map[self.outputs['names'][i]], code_indent, i, PREFIX_TENSOR_NAME, self.view_map[self.outputs['names'][i]], 
+    code_indent)
 
         else:
             raise ValueError(
@@ -234,8 +237,8 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return f"""
-#include "{header_file_path}"
+    return ("""
+#include "{}"
 #include <memory>
 
 #include "glog/logging.h"
@@ -254,7 +257,7 @@ def source_include(header_file_path):
 #include "paddle/fluid/platform/profiler/event_tracing.h"
 
 DECLARE_bool(conv2d_disable_cudnn);
-"""
+""").format(header_file_path)
 
 
 def api_namespace():

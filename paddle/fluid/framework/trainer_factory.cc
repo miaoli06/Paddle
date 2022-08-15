@@ -68,7 +68,9 @@ std::shared_ptr<TrainerBase> TrainerFactory::CreateTrainer(
 REGISTER_TRAINER_CLASS(MultiTrainer);
 REGISTER_TRAINER_CLASS(DistMultiTrainer);
 
-#if defined(PADDLE_WITH_PSCORE)
+#ifdef PADDLE_WITH_BOX_PS
+REGISTER_TRAINER_CLASS(BoxPSTrainer);
+#elif defined(PADDLE_WITH_PSCORE)
 REGISTER_TRAINER_CLASS(HeterPipelineTrainer);
 #endif
 
@@ -85,9 +87,6 @@ REGISTER_TRAINER_CLASS(PSGPUTrainer);
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL) || \
     defined(PADDLE_WITH_ASCEND_CL)
 REGISTER_TRAINER_CLASS(PipelineTrainer);
-#endif
-#ifdef PADDLE_WITH_BOX_PS
-REGISTER_TRAINER_CLASS(BoxPSTrainer);
 #endif
 }  // namespace framework
 }  // namespace paddle

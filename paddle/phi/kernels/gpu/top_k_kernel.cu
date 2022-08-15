@@ -78,6 +78,7 @@ void TopkKernel(const Context& dev_ctx,
 
     if (input_width <= 2 && k <= input_width) {
       // cols is small and large rows data
+      auto* ctx = reinterpret_cast<const phi::GPUContext*>(&dev_ctx);
       if (ops::SortMinTopK<T>(*ctx, input, input_width, input_height, k, out,
                          indices, largest)) {
         return;
@@ -241,9 +242,10 @@ void TopkKernel(const Context& dev_ctx,
     if (k > input_width) k = input_width;
     if (input_width <= 2 && k <= input_width) {
       // cols is small and large rows data
+      auto* ctx = reinterpret_cast<const phi::GPUContext*>(&dev_ctx);
       if (ops::SortMinTopK<T>(*ctx, &trans_input, 
               input_width, input_height, k, &trans_out,
-              &trans_ind,, largest)) {
+              &trans_ind, largest)) {
         funcs::TransCompute<phi::GPUContext, int64_t>(
             ndims, dev_ctx, trans_ind, indices, trans);
         funcs::TransCompute<phi::GPUContext, T>(

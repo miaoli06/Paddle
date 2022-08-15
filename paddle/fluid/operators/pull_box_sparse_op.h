@@ -35,13 +35,8 @@ static void PaddingZeros(const framework::ExecutionContext &ctx,
   data->Resize({1, hidden_size});
   data->mutable_data<T>(ctx.GetPlace());
 
-  auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+  auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
   phi::funcs::set_constant(dev_ctx, data, 0);
-
-  //  auto data_eigen = framework::EigenVector<T>::Flatten(*data);
-  //  auto &place = *ctx.template device_context<platform::CUDADeviceContext>()
-  //                     .eigen_device();
-  //  data_eigen.device(place) = data_eigen.constant(static_cast<T>(0));
 
   // set lod
   std::vector<size_t> v_lod(batch_size + 1, 1);
@@ -65,7 +60,7 @@ static void PullCacheValuesFunctor(const framework::ExecutionContext &ctx) {
       const_cast<float *>(output->mutable_data<float>(ctx.GetPlace()));
 
   auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
-  int i = BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
+  int i = ctx.GetPlace().GetDeviceId();
 
   box_ptr->gpu_replica_cache.front().PullCacheValue(input_data, output_data,
                                                     batch_size, i);
@@ -84,8 +79,7 @@ static void LookupInputFunctor(const framework::ExecutionContext &ctx) {
       const_cast<float *>(output->mutable_data<float>(ctx.GetPlace()));
 
   auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
-  size_t device_id =
-      BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
+  size_t device_id = ctx.GetPlace().GetDeviceId();
   box_ptr->input_table_deque_.front().LookupInput(input_data, output_data,
                                                   batch_size, device_id);
 #endif

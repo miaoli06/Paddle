@@ -14,8 +14,8 @@
 
 #include <string>
 #include "paddle/fluid/operators/fused/fused_seqpool_cvm_with_pcoc_op.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace operators {
@@ -184,10 +184,9 @@ void FusedSeqpoolCVMWithPCOC(
     const int embedding_size, const float padding_value, const bool use_cvm,
     const int used_cvm_offset, const int max_cvm_offset, float need_filter,
     float show_coeff, float clk_coeff, float threshold, const int quant_ratio) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+                 platform::DeviceContextPool::Instance().Get(place))
+                 ->stream();
 
   size_t total_ptr_len = input_data.size() + output_data.size() +
                          seqpool_output_data.size() + lods.size();
@@ -332,10 +331,9 @@ void FusedSeqpoolCVMWithPCOCGrad(const paddle::platform::Place &place,
                                  const int used_cvm_offset,
                                  const int max_cvm_offset,
                                  const float *q_values) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                    platform::DeviceContextPool::Instance().Get(
-                        BOOST_GET_CONST(platform::CUDAPlace, place)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+                 platform::DeviceContextPool::Instance().Get(place))
+                 ->stream();
   size_t total_ptr_len = out_grads_data.size() + in_grads_data.size() +
                          cvm_data.size() + lods.size();
   auto temp_ptr = memory::AllocShared(place, total_ptr_len * sizeof(void *));
@@ -404,6 +402,9 @@ class FusedSeqpoolCVMWithPCOCCUDAKernel : public framework::OpKernel<T> {
     const int max_cvm_offset = ctx.Attr<int>("max_cvm_offset");
     const int quant_ratio = ctx.Attr<int>("quant_ratio");
     int embed_index_diff = max_cvm_offset - 2 * used_cvm_offset + 6;
+    
+    framework::GPULodVector gpu_lods[slot_size];
+    auto place = ctx.GetPlace();
 
     int embedding_size = inputs[0]->numel() / inputs[0]->dims()[0];
     int batch_size = -1;
@@ -411,9 +412,9 @@ class FusedSeqpoolCVMWithPCOCCUDAKernel : public framework::OpKernel<T> {
       const auto *input = inputs[i];
       auto dims = input->dims();
 
-      auto lod = input->lod();
-      auto lod_level = lod.size();
-      int cur_batch = lod[lod_level - 1].size() - 1;
+      CHECK(input->lod().size() == 1);
+      auto lod_data = input->lod()[0];
+      int cur_batch = lod_data.size() - 1;
       if (batch_size == -1) {
         batch_size = cur_batch;
       } else {
@@ -429,15 +430,15 @@ class FusedSeqpoolCVMWithPCOCCUDAKernel : public framework::OpKernel<T> {
         output->Resize({batch_size, embedding_size - max_cvm_offset});
       }
       output_data[i] =
-          reinterpret_cast<T *>(output->mutable_data<T>(ctx.GetPlace()));
-      lods_data[i] = lod[lod_level - 1].CUDAData(ctx.GetPlace());
+          reinterpret_cast<T *>(output->mutable_data<T>(place));
+      lods_data[i] = gpu_lods[i].mutable_data<size_t>(place, lod_data);
 
       seqpool_output_data[i] =
           reinterpret_cast<T *>(seqpool_outputs[i].mutable_data<T>(
-              {batch_size, embedding_size}, ctx.GetPlace()));
+              {batch_size, embedding_size}, place));
     }
 
-    FusedSeqpoolCVMWithPCOC(ctx.GetPlace(), input_data, output_data,
+    FusedSeqpoolCVMWithPCOC(place, input_data, output_data,
                             seqpool_output_data, lods_data, batch_size,
                             slot_size, embedding_size, padding_value, use_cvm,
                             used_cvm_offset, max_cvm_offset, need_filter,
@@ -459,7 +460,7 @@ class FusedSeqpoolCVMWithPCOCGradCUDAKernel : public framework::OpKernel<T> {
     const int max_cvm_offset = ctx.Attr<int>("max_cvm_offset");
 
     auto place = ctx.GetPlace();
-    int device_id = boost::get<platform::CUDAPlace>(place).GetDeviceId();
+    int device_id = place.GetDeviceId();
     LoDTensor *qvalue_tensor = NULL;
 #ifdef PADDLE_WITH_BOX_PS
     qvalue_tensor =
@@ -475,15 +476,16 @@ class FusedSeqpoolCVMWithPCOCGradCUDAKernel : public framework::OpKernel<T> {
     std::vector<T *> in_grads_data(slot_size);
     std::vector<const T *> cvm_data(slot_size);
     std::vector<const size_t *> lods_data(slot_size);
+    
+    framework::GPULodVector gpu_lods[slot_size];
 
     int embedding_size = in_grads[0]->numel() / in_grads[0]->dims()[0];
     int batch_size = -1;
     for (size_t i = 0; i < slot_size; ++i) {
       auto *in_grad = in_grads[i];
 
-      auto lod = in_grad->lod();
-      auto lod_level = lod.size();
-      int cur_batch = lod[lod_level - 1].size() - 1;
+      auto lod_data = in_grad->lod()[0];
+      int cur_batch = lod_data.size() - 1;
       if (batch_size == -1) {
         batch_size = cur_batch;
       } else {
@@ -495,11 +497,11 @@ class FusedSeqpoolCVMWithPCOCGradCUDAKernel : public framework::OpKernel<T> {
       out_grads_data[i] = reinterpret_cast<const T *>(out_grad->data<T>());
 
       in_grads_data[i] =
-          reinterpret_cast<T *>(in_grad->mutable_data<T>(ctx.GetPlace()));
-      lods_data[i] = lod[lod_level - 1].CUDAData(ctx.GetPlace());
+          reinterpret_cast<T *>(in_grad->mutable_data<T>(place));
+      lods_data[i] = gpu_lods[i].mutable_data<size_t>(place, lod_data);
       cvm_data[i] = reinterpret_cast<const T *>(cvm->data<T>());
     }
-    FusedSeqpoolCVMWithPCOCGrad(ctx.GetPlace(), out_grads_data, in_grads_data,
+    FusedSeqpoolCVMWithPCOCGrad(place, out_grads_data, in_grads_data,
                                 cvm_data, lods_data, batch_size, slot_size,
                                 embedding_size, use_cvm, used_cvm_offset,
                                 max_cvm_offset, q_values);

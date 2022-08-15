@@ -699,6 +699,8 @@ if(WITH_DISTRIBUTE)
            section_worker.cc
            device_worker_factory.cc
            data_set.cc
+           boxps_trainer.cc
+           boxps_worker.cc
       DEPS op_registry
            device_context
            scope
@@ -778,6 +780,8 @@ if(WITH_DISTRIBUTE)
            heter_section_worker.cc
            device_worker_factory.cc
            data_set.cc
+           boxps_trainer.cc
+           boxps_worker.cc
       DEPS op_registry
            device_context
            scope
@@ -856,6 +860,8 @@ if(WITH_DISTRIBUTE)
            section_worker.cc
            device_worker_factory.cc
            data_set.cc
+           boxps_trainer.cc
+           boxps_worker.cc
       DEPS op_registry
            device_context
            scope
@@ -919,6 +925,8 @@ elseif(WITH_PSLIB)
          section_worker.cc
          device_worker_factory.cc
          data_set.cc
+         boxps_trainer.cc
+         boxps_worker.cc
     DEPS op_registry
          device_context
          scope

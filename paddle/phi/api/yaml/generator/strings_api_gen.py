@@ -32,10 +32,10 @@ class StringsAPI(ForwardAPI):
         return self.api
 
     def gene_api_declaration(self):
-        return f"""
-// {", ".join(self.outputs['names'])}
-{super(StringsAPI, self).gene_api_declaration()}
-"""
+        return ("""
+// {}
+{}
+""").format(", ".join(self.outputs['names']), super(StringsAPI, self).gene_api_declaration())
 
     def get_kernel_tensor_out_type(self, output_name):
         strings_type = 'TensorType::DENSE_TENSOR'
@@ -69,27 +69,29 @@ class StringsAPI(ForwardAPI):
             inplace_assign = " = " + self.inplace_map[self.outputs['names'][
                 0]] if inplace_flag and self.inplace_map is not None and self.outputs[
                     'names'][0] in self.inplace_map else ""
-            output_create = f"""
-  {return_type} api_output{inplace_assign};
-  {tensor_type}* kernel_out = dynamic_cast<{tensor_type}*>(SetStringsKernelOutput(kernel_backend, &api_output, {kernel_tensor_out_type}));"""
+            output_create = ("""
+  {} api_output{};
+  {}* kernel_out = dynamic_cast<{}*>(SetStringsKernelOutput(kernel_backend, &api_output, {}));""").format(
+      return_type, inplace_assign, tensor_type, tensor_type, kernel_tensor_out_type)
 
         elif len(out_dtype_list) > 1:
-            output_create = f"""
-  {return_type} api_output;"""
+            output_create = ("""
+  {} api_output;""").format(return_type)
 
             for i in range(len(out_dtype_list)):
-                kernel_output.append(f'kernel_out_{i}')
-                output_names.append(f'kernel_out_{i}')
+                kernel_output.append(('kernel_out_{}').format(i))
+                output_names.append(('kernel_out_{}').format(i))
                 kernel_tensor_out_type = self.get_kernel_tensor_out_type(
                     self.outputs['names'][i])
                 tensor_type = self.get_tensor_type(kernel_tensor_out_type)
                 if inplace_flag and self.inplace_map is not None and self.outputs[
                         'names'][i] in self.inplace_map:
-                    output_create = output_create + f"""
-  std::get<{i}>(api_output) = {self.inplace_map[self.outputs['names'][i]]};"""
+                    output_create = output_create + ("""
+  std::get<{}>(api_output) = {};""").format(i, self.inplace_map[self.outputs['names'][i]])
 
-                output_create = output_create + f"""
-  {tensor_type}* kernel_out_{i} = dynamic_cast<{tensor_type}*>(SetStringsKernelOutput(&std::get<{i}>(api_output), {kernel_tensor_out_type}));"""
+                output_create = output_create + ("""
+  {}* kernel_out_{} = dynamic_cast<{}*>(SetStringsKernelOutput(&std::get<{}>(api_output), {}));""").format(
+      tensor_type, i, tensor_type, i, kernel_tensor_out_type)
 
         else:
             raise ValueError(
@@ -124,8 +126,9 @@ class StringsAPI(ForwardAPI):
         input_tensor_code = ""
         # set input_tensor_code
         for i, input_name in enumerate(input_names):
-            input_tensor_code = input_tensor_code + f"""
-{code_indent}  auto {PREFIX_TENSOR_NAME}{input_name} = TensorToStringTensor({input_name});"""
+            input_tensor_code = input_tensor_code + ("""
+{}  auto {}{} = TensorToStringTensor({});""").format(
+    code_indent, PREFIX_TENSOR_NAME, input_name, input_name)
 
         # set kernel_args
         kernel_args = "*dev_ctx, "
@@ -175,31 +178,34 @@ class StringsAPI(ForwardAPI):
         outputs_args, kernel_output_names, output_create = self.gene_output(
             self.outputs['types'], None, '', inplace_flag)
 
-        return f"""
+        return ("""
   // 1. Get kernel signature and kernel
-  VLOG(6) << "{self.api} api strings kernel key: [" << kernel_backend << ", " << kernel_layout << ", "<< kernel_data_type << "]";
+  VLOG(6) << "{} api strings kernel key: [" << kernel_backend << ", " << kernel_layout << ", "<< kernel_data_type << "]";
   auto kernel_result = phi::KernelFactory::Instance().SelectKernelOrThrowError(
-      "{self.kernel['func'][0]}", {{kernel_backend, kernel_layout, kernel_data_type}});
+      "{}", {{kernel_backend, kernel_layout, kernel_data_type}});
   const auto& kernel = kernel_result.kernel;
-  VLOG(6) << "{self.api} api strings kernel: " << kernel;
+  VLOG(6) << "{} api strings kernel: " << kernel;
 
   // 2. Get Device Context and input
   auto* dev_ctx = GetDeviceContextByBackend(kernel_result.has_fallback_cpu ? Backend::CPU : kernel_backend);
-  {input_tensors}
+  {}
 
   //  3. Set output
-  {output_create}
-{self.gene_infer_meta(kernel_output_names, code_indent)}
+  {}
+{}
 
   // 4. run kernel
 
-{code_indent}  using kernel_signature = {kernel_signature};
-{code_indent}  auto* kernel_fn = kernel.GetVariadicKernelFn<kernel_signature>();
-{code_indent}  (*kernel_fn)({kernel_args}, {", ".join(outputs_args)});
+{}  using kernel_signature = {};
+{}  auto* kernel_fn = kernel.GetVariadicKernelFn<kernel_signature>();
+{}  (*kernel_fn)({}, {});
 
-{code_indent}  {self.gene_return_code()}"""
+{}  {}""").format(
+    self.api, self.kernel['func'][0], self.api, input_tensors, output_create, 
+    self.gene_infer_meta(kernel_output_names, code_indent), code_indent, kernel_signature, 
+    code_indent, code_indent, kernel_args, ", ".join(outputs_args), code_indent, self.gene_return_code())
 
-    def gene_kernel_select(self) -> str:
+    def gene_kernel_select(self):
         api = self.api
         input_names = self.inputs['names']
         attrs = self.attrs
@@ -217,7 +223,7 @@ class StringsAPI(ForwardAPI):
         for attr_name in attrs['names']:
             if attrs['attr_info'][attr_name][0] == 'Backend':
                 assert kernel['backend'] is not None, \
-                    f"{api} api: When there is a parameter with 'Backend' type in attributes, you must set backend of kernel manually."
+                    ("{} api: When there is a parameter with 'Backend' type in attributes, you must set backend of kernel manually.").format(api)
                 attr_backend_count = attr_backend_count + 1
 
         # preprocess kernel configures
@@ -227,20 +233,20 @@ class StringsAPI(ForwardAPI):
                 vars_list = kernel['backend'].split('>')
                 assert len(
                     vars_list
-                ) == 2, f"{api} api: The number of params to set backend with '>' only allows 2, but received {len(vars_list)}."
+                ) == 2, ("{} api: The number of params to set backend with '>' only allows 2, but received {}.").format(api, len(vars_list))
                 assert (vars_list[0].strip() in attrs['names']) and (attrs['attr_info'][vars_list[0].strip()][0] == 'const Place&'), \
-                    f"{api} api: When use '>' to set kernel backend, the first param should be a attribute with Place type."
-                kernel_select_code = kernel_select_code + f"""
-  kernel_backend = ParseBackendWithInputOrder({vars_list[0].strip()}, {vars_list[1].strip()});
-"""
+                    ("{} api: When use '>' to set kernel backend, the first param should be a attribute with Place type.").format(api)
+                kernel_select_code = kernel_select_code + ("""
+  kernel_backend = ParseBackendWithInputOrder({}, {});
+""").format(vars_list[0].strip(), vars_list[1].strip())
 
             else:
                 args_str = ""
                 for ele in kernel['backend'].split(','):
                     args_str = args_str + ele.strip() + ', '
-                kernel_select_code = kernel_select_code + f"""
-  kernel_backend = ParseBackend({args_str[:-2]});
-"""
+                kernel_select_code = kernel_select_code + ("""
+  kernel_backend = ParseBackend({});
+""").format(args_str[:-2])
 
         kernel_select_args = ""
         for input_name in input_names:
@@ -252,21 +258,23 @@ class StringsAPI(ForwardAPI):
         kernel_select_code = kernel_key_item_init + kernel_select_code
 
         if len(input_names) > 0:
-            kernel_select_code = kernel_select_code + f"""
-  auto kernel_key_set = ParseKernelKeyByInputArgs({kernel_select_args});
+            kernel_select_code = kernel_select_code + ("""
+  auto kernel_key_set = ParseKernelKeyByInputArgs({});
   auto kernel_key = kernel_key_set.GetHighestPriorityKernelKey();
-  kernel_backend = kernel_key.backend();"""
+  kernel_backend = kernel_key.backend();""").format(kernel_select_args)
 
         return kernel_select_code
 
     def gene_base_api_code(self, inplace_flag=False):
         api_func_name = self.get_api_func_name()
-        return f"""
-PADDLE_API {self.get_return_type(inplace_flag)} {api_func_name}({self.get_define_args(inplace_flag)}) {{
-{self.gene_kernel_select()}
-{self.gen_string_tensor_kernel_code(inplace_flag)}
+        return ("""
+PADDLE_API {} {}({}) {{
+{}
+{}
 }}
-"""
+""").format(self.get_return_type(inplace_flag), api_func_name, 
+            self.get_define_args(inplace_flag), 
+            self.gene_kernel_select(), self.gen_string_tensor_kernel_code(inplace_flag))
 
 
 def header_include():
@@ -281,8 +289,8 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return f"""
-#include "{header_file_path}"
+    return ("""
+#include "{}"
 
 #include "paddle/phi/api/lib/api_gen_utils.h"
 #include "paddle/phi/core/kernel_context.h"
@@ -292,7 +300,7 @@ def source_include(header_file_path):
 #include "paddle/phi/api/lib/api_registry.h"
 #include "paddle/phi/api/lib/kernel_dispatch.h"
 #include "paddle/phi/core/kernel_registry.h"
-"""
+""").format(header_file_path)
 
 
 def api_register():

@@ -12,10 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-include(ExternalProject)
+INCLUDE(ExternalProject)
 
+if((NOT DEFINED OPENSSL_ROOT))
 find_package(OpenSSL REQUIRED)
-
+else()
+set(OPENSSL_INCLUDE_DIR ${OPENSSL_ROOT}/include)
+set(OPENSSL_LIBRARIES ${OPENSSL_ROOT}/lib)
+set(OPENSSL_SSL_LIBRARY ${OPENSSL_ROOT}/lib/libssl.a)
+set(OPENSSL_CRYPTO_LIBRARY ${OPENSSL_ROOT}/lib/libcrypto.a)
+endif()
 message(STATUS "ssl:" ${OPENSSL_SSL_LIBRARY})
 message(STATUS "crypto:" ${OPENSSL_CRYPTO_LIBRARY})
 
@@ -46,8 +52,8 @@ ExternalProject_Add(
   extern_brpc
   ${EXTERNAL_PROJECT_LOG_ARGS}
   # TODO(gongwb): change to de newst repo when they changed
-  GIT_REPOSITORY "https://github.com/wangjiawei04/brpc"
-  GIT_TAG "e203afb794caf027da0f1e0776443e7d20c0c28e"
+  GIT_REPOSITORY "https://github.com/qingshui/incubator-brpc.git"
+  GIT_TAG "098f6db0b003c7d975e6ba57074258957020c00e"
   PREFIX ${BRPC_PREFIX_DIR}
   UPDATE_COMMAND ""
   CMAKE_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}

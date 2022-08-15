@@ -65,7 +65,7 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
 
     int block_matrix_row = max_rank * x_fea_dim;
 
-    auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
 
     int max_ins = std::max(ins_num, max_size);
 
@@ -78,36 +78,13 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
     ins_rank->mutable_data<T>(ctx.GetPlace());
     Out->mutable_data<T>(ctx.GetPlace());
 
-    // initialize
-    //    auto param_help_eigen =
-    //    framework::EigenVector<T>::Flatten(*param_help);
-    //    auto input_help_eigen =
-    //    framework::EigenVector<T>::Flatten(*input_help);
-    //    auto ins_rank_eigen = framework::EigenVector<T>::Flatten(*ins_rank);
-    //    auto out_eigen = framework::EigenVector<T>::Flatten(*Out);
-
-    auto &place = *ctx.template device_context<platform::CUDADeviceContext>()
-                       .eigen_device();
     auto stream = ctx.cuda_device_context().stream();
-
-    //    param_help_eigen.device(place) =
-    //        param_help_eigen.constant(static_cast<T>(0));
-    //    input_help_eigen.device(place) =
-    //        input_help_eigen.constant(static_cast<T>(0));
-    //    ins_rank_eigen.device(place) =
-    //    ins_rank_eigen.constant(static_cast<T>(-1));
-    // out_eigen.device(place) = out_eigen.constant(static_cast<T>(0));
-
     // get data ptr
     T *input_help_data = input_help->data<T>();
     T *param_help_data = param_help->data<T>();
     T *ins_rank_data = ins_rank->data<T>();
     T *out_data = Out->data<T>();
 
-    //    cudaMemsetAsync(param_help_data, 0, sizeof(T) * param_help->numel(),
-    //                    stream);
-    //    cudaMemsetAsync(input_help_data, 0, sizeof(T) * input_help->numel(),
-    //                    stream);
     phi::funcs::set_constant(dev_ctx, ins_rank, -1);
 
     expand_rank_attention_input(stream, X->data<T>(), ins_num, x_fea_dim,
@@ -129,7 +106,7 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
     int64_t strideA = block_matrix_row;
     int64_t strideB = block_matrix_row * para_col;
 
-    auto blas = phi::funcs::GetBlas<platform::CUDADeviceContext, T>(dev_ctx);
+    auto blas = phi::funcs::GetBlas<phi::GPUContext, T>(dev_ctx);
     blas.BatchedGEMM(transA, transB, 1, para_col, block_matrix_row, alpha,
                      input_help_data, param_help_data, beta, out_data, ins_num,
                      strideA, strideB);
@@ -160,17 +137,11 @@ class RankAttentionGradOpCUDAKernel : public framework::OpKernel<T> {
     auto rank_offset_dims = rank_offset->dims();
     auto max_rank = (rank_offset_dims[1] - 1) / 2;
     int block_matrix_row = max_rank * x_fea_dim;
-    auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
-    auto &place = *ctx.template device_context<platform::CUDADeviceContext>()
-                       .eigen_device();
+    auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
     auto stream = ctx.cuda_device_context().stream();
     int max_ins = std::max(ins_num, max_size);
     // initialize out grad
     T *drank_para_ptr = drank_para->mutable_data<T>(ctx.GetPlace());
-    //    auto drank_para_eigen =
-    //    framework::EigenVector<T>::Flatten(*drank_para);
-    //    drank_para_eigen.device(place) =
-    //        drank_para_eigen.constant(static_cast<T>(0));
     cudaMemsetAsync(drank_para_ptr, 0, sizeof(T) * drank_para->numel(), stream);
 
     // copy data
@@ -179,17 +150,13 @@ class RankAttentionGradOpCUDAKernel : public framework::OpKernel<T> {
         {max_ins * block_matrix_row, para_col}, dev_ctx);
 
     // initialize
-    //    auto param_grad_eigen =
-    //    framework::EigenVector<T>::Flatten(param_grad);
-    //    param_grad_eigen.device(place) =
-    //        param_grad_eigen.constant(static_cast<T>(0));
     // get data ptr
     const T *input_help_data = input_help->data<T>();
     const T *ins_rank_data = ins_rank->data<T>();
     T *param_grad_data = param_grad.data<T>();
     cudaMemsetAsync(param_grad_data, 0, sizeof(T) * param_grad.numel(), stream);
 
-    auto blas = math::GetBlas<platform::CUDADeviceContext, T>(dev_ctx);
+    auto blas = phi::funcs::GetBlas<phi::GPUContext, T>(dev_ctx);
     T alpha = 1;
     T beta = 0;
 
@@ -319,7 +286,7 @@ class RankAttention2CUDAKernel : public framework::OpKernel<T> {
         max_rank * max_rank * x_fea_dim, para_row,
         platform::errors::InvalidArgument("Input(RankParam) has wrong rows."));
 
-    auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
     auto stream = ctx.cuda_device_context().stream();
 
     // get data ptr
@@ -352,12 +319,12 @@ class RankAttention2GradOpCUDAKernel : public framework::OpKernel<T> {
     auto rank_offset_dims = rank_offset->dims();
     auto max_rank = (rank_offset_dims[1] - 1) / 2;
 
-    auto &dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
     auto stream = ctx.cuda_device_context().stream();
 
     // initialize out grad
     T *drank_para_ptr = drank_para->mutable_data<T>(ctx.GetPlace());
-    math::set_constant(dev_ctx, drank_para, 0.0);
+    phi::funcs::set_constant(dev_ctx, drank_para, 0.0);
 
     kernel_rank_back_propagate<<<GET_BLOCKS(ins_num * x_fea_dim * para_col *
                                             max_rank),
@@ -371,7 +338,7 @@ class RankAttention2GradOpCUDAKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-using GPUCtx = paddle::platform::CUDADeviceContext;
+using GPUCtx = phi::GPUContext;
 REGISTER_OP_CUDA_KERNEL(rank_attention,
                         ops::RankAttentionCUDAKernel<GPUCtx, float>,
                         ops::RankAttentionCUDAKernel<GPUCtx, double>);

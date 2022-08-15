@@ -320,7 +320,7 @@ class AllocatorFacadePrivate {
         }
 #endif
 #ifdef PADDLE_WITH_CUDA
-        for (int dev_id = 0; dev_id < platform::GetCUDADeviceCount();
+        for (int dev_id = 0; dev_id < platform::GetGPUDeviceCount();
              ++dev_id) {
           InitSampleCUDAAllocator(platform::CUDAPlace(dev_id));
         }
@@ -339,7 +339,7 @@ class AllocatorFacadePrivate {
     InitZeroSizeAllocators();
     InitSystemAllocators();
 
-    if (strategy != AllocatorStrategy::kSamplePool && 
+    if (strategy_ != AllocatorStrategy::kSamplePool &&
 		FLAGS_gpu_allocator_retry_time > 0) {
       WrapCUDARetryAllocator(FLAGS_gpu_allocator_retry_time);
     }

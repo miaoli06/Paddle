@@ -19,21 +19,173 @@
 #include <numeric>
 
 #include "paddle/fluid/framework/lod_tensor.h"
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#endif
+#ifdef PADDLE_WITH_BOX_PS
+#include <boxps_extends.h>
+#endif
 
-#if defined(PADDLE_WITH_PSLIB) || defined(PADDLE_WITH_PSCORE)
+#if defined(PADDLE_WITH_PSLIB) || defined(PADDLE_WITH_PSCORE) || defined(PADDLE_WITH_BOX_PS)
 namespace paddle {
 namespace framework {
 
 std::shared_ptr<Metric> Metric::s_instance_ = nullptr;
 
-void BasicAucCalculator::init(int table_size) {
-  set_table_size(table_size);
+void BasicAucCalculator::add_unlock_data(double pred, int label) {
+  PADDLE_ENFORCE_GE(pred, 0.0, platform::errors::PreconditionNotMet(
+                                   "pred should be greater than 0"));
+  PADDLE_ENFORCE_LE(pred, 1.0, platform::errors::PreconditionNotMet(
+                                   "pred should be lower than 1"));
+  PADDLE_ENFORCE_EQ(
+      label * label, label,
+      platform::errors::PreconditionNotMet(
+          "label must be equal to 0 or 1, but its value is: %d", label));
+  int pos = std::min(static_cast<int>(pred * _table_size), _table_size - 1);
+  PADDLE_ENFORCE_GE(
+      pos, 0,
+      platform::errors::PreconditionNotMet(
+          "pos must be equal or greater than 0, but its value is: %d", pos));
+  PADDLE_ENFORCE_LT(
+      pos, _table_size,
+      platform::errors::PreconditionNotMet(
+          "pos must be less than table_size, but its value is: %d", pos));
+  _local_abserr += fabs(pred - label);
+  _local_sqrerr += (pred - label) * (pred - label);
+  _local_pred += pred;
+  ++_table[label][pos];
+}
 
+void BasicAucCalculator::add_unlock_data(double pred, int label,
+                                         float sample_scale) {
+  PADDLE_ENFORCE_GE(pred, 0.0, platform::errors::PreconditionNotMet(
+                                   "pred should be greater than 0"));
+  PADDLE_ENFORCE_LE(pred, 1.0, platform::errors::PreconditionNotMet(
+                                   "pred should be lower than 1"));
+  PADDLE_ENFORCE_EQ(
+      label * label, label,
+      platform::errors::PreconditionNotMet(
+          "label must be equal to 0 or 1, but its value is: %d", label));
+  int pos = std::min(static_cast<int>(pred * _table_size), _table_size - 1);
+  PADDLE_ENFORCE_GE(
+      pos, 0,
+      platform::errors::PreconditionNotMet(
+          "pos must be equal or greater than 0, but its value is: %d", pos));
+  PADDLE_ENFORCE_LT(
+      pos, _table_size,
+      platform::errors::PreconditionNotMet(
+          "pos must be less than table_size, but its value is: %d", pos));
+  _local_abserr += fabs(pred - label);
+  _local_sqrerr += (pred - label) * (pred - label);
+
+  _local_pred += pred * sample_scale;
+  _table[label][pos] += sample_scale;
+}
+
+void BasicAucCalculator::add_data(
+        const float* d_pred, const int64_t* d_label,
+        int batch_size, const paddle::platform::Place& place) {
+  if (platform::is_gpu_place(place)) {
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+    thread_local std::vector<float> h_pred;
+    thread_local std::vector<int64_t> h_label;
+    h_pred.resize(batch_size);
+    h_label.resize(batch_size);
+    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
+        cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size,
+        cudaMemcpyDeviceToHost);
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      add_unlock_data(h_pred[i], h_label[i]);
+    }
+#else
+    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
+#endif
+  } else {
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      add_unlock_data(d_pred[i], d_label[i]);
+    }
+  }
+}
+
+void BasicAucCalculator::add_sample_data(
+    const float* d_pred, const int64_t* d_label,
+    const std::vector<float>& d_sample_scale, int batch_size,
+    const paddle::platform::Place& place) {
+  if (platform::is_gpu_place(place)) {
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+    thread_local std::vector<float> h_pred;
+    thread_local std::vector<int64_t> h_label;
+    h_pred.resize(batch_size);
+    h_label.resize(batch_size);
+    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
+        cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size,
+        cudaMemcpyDeviceToHost);
+
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      add_unlock_data(h_pred[i], h_label[i], d_sample_scale[i]);
+    }
+#else
+    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
+#endif
+  } else {
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      add_unlock_data(d_pred[i], d_label[i], d_sample_scale[i]);
+    }
+  }
+}
+
+// add mask data
+void BasicAucCalculator::add_mask_data(const float* d_pred,
+                                       const int64_t* d_label,
+                                       const int64_t* d_mask, int batch_size,
+                                       const paddle::platform::Place& place) {
+  if (platform::is_gpu_place(place)) {
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+    thread_local std::vector<float> h_pred;
+    thread_local std::vector<int64_t> h_label;
+    thread_local std::vector<int64_t> h_mask;
+    h_pred.resize(batch_size);
+    h_label.resize(batch_size);
+    h_mask.resize(batch_size);
+    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
+        cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size,
+        cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_mask.data(), d_mask, sizeof(int64_t) * batch_size,
+        cudaMemcpyDeviceToHost);
+
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      if (h_mask[i]) {
+        add_unlock_data(h_pred[i], h_label[i]);
+      }
+    }
+#else
+    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
+#endif
+  } else {
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      if (d_mask[i]) {
+        add_unlock_data(d_pred[i], d_label[i]);
+      }
+    }
+  }
+}
+
+void BasicAucCalculator::init(int table_size, int max_batch_size) {
+  set_table_size(table_size);
+  set_max_batch_size(max_batch_size);
   // init CPU memory
   for (int i = 0; i < 2; i++) {
     _table[i] = std::vector<double>();
   }
-
   // reset
   reset();
 }
@@ -48,108 +200,42 @@ void BasicAucCalculator::reset() {
   _local_pred = 0;
 }
 
-void BasicAucCalculator::add_data(const float* d_pred,
-                                  const int64_t* d_label,
-                                  int batch_size,
-                                  const paddle::platform::Place& place) {
-  thread_local std::vector<float> h_pred;
-  thread_local std::vector<int64_t> h_label;
-  h_pred.resize(batch_size);
-  h_label.resize(batch_size);
-  memcpy(h_pred.data(), d_pred, sizeof(float) * batch_size);
-  memcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size);
-  std::lock_guard<std::mutex> lock(_table_mutex);
-  for (int i = 0; i < batch_size; ++i) {
-    add_unlock_data(h_pred[i], h_label[i]);
-  }
-}
-
-void BasicAucCalculator::add_unlock_data(double pred, int label) {
-  PADDLE_ENFORCE_GE(
-      pred,
-      0.0,
-      platform::errors::PreconditionNotMet("pred should be greater than 0"));
-  PADDLE_ENFORCE_LE(
-      pred,
-      1.0,
-      platform::errors::PreconditionNotMet("pred should be lower than 1"));
-  PADDLE_ENFORCE_EQ(
-      label * label,
-      label,
-      platform::errors::PreconditionNotMet(
-          "label must be equal to 0 or 1, but its value is: %d", label));
-  int pos = std::min(static_cast<int>(pred * _table_size), _table_size - 1);
-  PADDLE_ENFORCE_GE(
-      pos,
-      0,
-      platform::errors::PreconditionNotMet(
-          "pos must be equal or greater than 0, but its value is: %d", pos));
-  PADDLE_ENFORCE_LT(
-      pos,
-      _table_size,
-      platform::errors::PreconditionNotMet(
-          "pos must be less than table_size, but its value is: %d", pos));
-  _local_abserr += fabs(pred - label);
-  _local_sqrerr += (pred - label) * (pred - label);
-  _local_pred += pred;
-  ++_table[label][pos];
-}
-
-// add mask data
-void BasicAucCalculator::add_mask_data(const float* d_pred,
-                                       const int64_t* d_label,
-                                       const int64_t* d_mask,
-                                       int batch_size,
-                                       const paddle::platform::Place& place) {
-  thread_local std::vector<float> h_pred;
-  thread_local std::vector<int64_t> h_label;
-  thread_local std::vector<int64_t> h_mask;
-  h_pred.resize(batch_size);
-  h_label.resize(batch_size);
-  h_mask.resize(batch_size);
-
-  memcpy(h_pred.data(), d_pred, sizeof(float) * batch_size);
-  memcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size);
-  memcpy(h_mask.data(), d_mask, sizeof(int64_t) * batch_size);
-
-  std::lock_guard<std::mutex> lock(_table_mutex);
-  for (int i = 0; i < batch_size; ++i) {
-    if (h_mask[i]) {
-      add_unlock_data(h_pred[i], h_label[i]);
-    }
-  }
-}
-
 void BasicAucCalculator::compute() {
-#if defined(PADDLE_WITH_GLOO)
-  double area = 0;
-  double fp = 0;
-  double tp = 0;
-
+  int node_size = 1;
+  double* table[2] = {&_table[0][0], &_table[1][0]};
+#ifdef PADDLE_WITH_BOX_PS
+  node_size = boxps::MPICluster::Ins().size();
+  if (node_size > 1) {
+    boxps::MPICluster::Ins().allreduce_sum(table[0], _table_size);
+    boxps::MPICluster::Ins().allreduce_sum(table[1], _table_size);
+  }
+#elif defined(PADDLE_WITH_GLOO)
   auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
   if (!gloo_wrapper->IsInitialized()) {
     VLOG(0) << "GLOO is not inited";
     gloo_wrapper->Init();
   }
+  std::vector<double> neg_table;
+  std::vector<double> pos_table;
+  node_size = gloo_wrapper->Size();
+  if (node_size > 1) {
+    neg_table = gloo_wrapper->AllReduce(_table[0], "sum");
+    pos_table = gloo_wrapper->AllReduce(_table[1], "sum");
+    table[0] = &neg_table[0];
+    table[1] = &pos_table[0];
+  }
+#endif
 
-  if (gloo_wrapper->Size() > 1) {
-    auto neg_table = gloo_wrapper->AllReduce(_table[0], "sum");
-    auto pos_table = gloo_wrapper->AllReduce(_table[1], "sum");
-    for (int i = _table_size - 1; i >= 0; i--) {
-      double newfp = fp + neg_table[i];
-      double newtp = tp + pos_table[i];
-      area += (newfp - fp) * (tp + newtp) / 2;
-      fp = newfp;
-      tp = newtp;
-    }
-  } else {
-    for (int i = _table_size - 1; i >= 0; i--) {
-      double newfp = fp + _table[0][i];
-      double newtp = tp + _table[1][i];
-      area += (newfp - fp) * (tp + newtp) / 2;
-      fp = newfp;
-      tp = newtp;
-    }
+  double area = 0;
+  double fp = 0;
+  double tp = 0;
+
+  for (int i = _table_size - 1; i >= 0; i--) {
+    double newfp = fp + table[0][i];
+    double newtp = tp + table[1][i];
+    area += (newfp - fp) * (tp + newtp) / 2;
+    fp = newfp;
+    tp = newtp;
   }
 
   if (fp < 1e-3 || tp < 1e-3) {
@@ -158,17 +244,22 @@ void BasicAucCalculator::compute() {
     _auc = area / (fp * tp);
   }
 
-  if (gloo_wrapper->Size() > 1) {
+  if (node_size > 1) {
+#ifdef PADDLE_WITH_BOX_PS
     // allreduce sum
-    std::vector<double> local_abserr_vec(1, _local_abserr);
-    std::vector<double> local_sqrerr_vec(1, _local_sqrerr);
-    std::vector<double> local_pred_vec(1, _local_pred);
-    auto global_abserr_vec = gloo_wrapper->AllReduce(local_abserr_vec, "sum");
-    auto global_sqrerr_vec = gloo_wrapper->AllReduce(local_sqrerr_vec, "sum");
-    auto global_pred_vec = gloo_wrapper->AllReduce(local_pred_vec, "sum");
-    _mae = global_abserr_vec[0] / (fp + tp);
-    _rmse = sqrt(global_sqrerr_vec[0] / (fp + tp));
-    _predicted_ctr = global_pred_vec[0] / (fp + tp);
+    double local_err[3] = {_local_abserr, _local_sqrerr, _local_pred};
+    boxps::MPICluster::Ins().allreduce_sum(local_err, 3);
+#elif defined(PADDLE_WITH_GLOO)
+    // allreduce sum
+    std::vector<double> local_err_temp{_local_abserr, _local_sqrerr, _local_pred};
+    auto local_err = gloo_wrapper->AllReduce(local_err_temp, "sum");
+#else
+    // allreduce sum
+    double local_err[3] = {_local_abserr, _local_sqrerr, _local_pred};
+#endif
+    _mae = local_err[0] / (fp + tp);
+    _rmse = sqrt(local_err[1] / (fp + tp));
+    _predicted_ctr = local_err[2] / (fp + tp);
   } else {
     _mae = _local_abserr / (fp + tp);
     _rmse = sqrt(_local_sqrerr / (fp + tp));
@@ -178,75 +269,44 @@ void BasicAucCalculator::compute() {
 
   _size = fp + tp;
 
-  calculate_bucket_error();
-#endif
+  calculate_bucket_error(table[0], table[1]);
 }
 
-void BasicAucCalculator::calculate_bucket_error() {
-#if defined(PADDLE_WITH_GLOO)
+void BasicAucCalculator::calculate_bucket_error(
+    const double *neg_table,
+    const double *pos_table) {
   double last_ctr = -1;
   double impression_sum = 0;
   double ctr_sum = 0.0;
   double click_sum = 0.0;
   double error_sum = 0.0;
   double error_count = 0;
-  auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-  if (gloo_wrapper->Size() > 1) {
-    auto neg_table = gloo_wrapper->AllReduce(_table[0], "sum");
-    auto pos_table = gloo_wrapper->AllReduce(_table[1], "sum");
-    for (int i = 0; i < _table_size; i++) {
-      double click = pos_table[i];
-      double show = neg_table[i] + pos_table[i];
-      double ctr = static_cast<double>(i) / _table_size;
-      if (fabs(ctr - last_ctr) > kMaxSpan) {
-        last_ctr = ctr;
-        impression_sum = 0.0;
-        ctr_sum = 0.0;
-        click_sum = 0.0;
-      }
-      impression_sum += show;
-      ctr_sum += ctr * show;
-      click_sum += click;
-      double adjust_ctr = ctr_sum / impression_sum;
-      double relative_error =
-          sqrt((1 - adjust_ctr) / (adjust_ctr * impression_sum));
-      if (relative_error < kRelativeErrorBound) {
-        double actual_ctr = click_sum / impression_sum;
-        double relative_ctr_error = fabs(actual_ctr / adjust_ctr - 1);
-        error_sum += relative_ctr_error * impression_sum;
-        error_count += impression_sum;
-        last_ctr = -1;
-      }
+  const double* table[2] = {neg_table, pos_table};
+  for (int i = 0; i < _table_size; i++) {
+    double click = table[1][i];
+    double show = table[0][i] + table[1][i];
+    double ctr = static_cast<double>(i) / _table_size;
+    if (fabs(ctr - last_ctr) > kMaxSpan) {
+      last_ctr = ctr;
+      impression_sum = 0.0;
+      ctr_sum = 0.0;
+      click_sum = 0.0;
     }
-  } else {
-    double* table[2] = {&_table[0][0], &_table[1][0]};
-    for (int i = 0; i < _table_size; i++) {
-      double click = table[1][i];
-      double show = table[0][i] + table[1][i];
-      double ctr = static_cast<double>(i) / _table_size;
-      if (fabs(ctr - last_ctr) > kMaxSpan) {
-        last_ctr = ctr;
-        impression_sum = 0.0;
-        ctr_sum = 0.0;
-        click_sum = 0.0;
-      }
-      impression_sum += show;
-      ctr_sum += ctr * show;
-      click_sum += click;
-      double adjust_ctr = ctr_sum / impression_sum;
-      double relative_error =
-          sqrt((1 - adjust_ctr) / (adjust_ctr * impression_sum));
-      if (relative_error < kRelativeErrorBound) {
-        double actual_ctr = click_sum / impression_sum;
-        double relative_ctr_error = fabs(actual_ctr / adjust_ctr - 1);
-        error_sum += relative_ctr_error * impression_sum;
-        error_count += impression_sum;
-        last_ctr = -1;
-      }
+    impression_sum += show;
+    ctr_sum += ctr * show;
+    click_sum += click;
+    double adjust_ctr = ctr_sum / impression_sum;
+    double relative_error =
+        sqrt((1 - adjust_ctr) / (adjust_ctr * impression_sum));
+    if (relative_error < kRelativeErrorBound) {
+      double actual_ctr = click_sum / impression_sum;
+      double relative_ctr_error = fabs(actual_ctr / adjust_ctr - 1);
+      error_sum += relative_ctr_error * impression_sum;
+      error_count += impression_sum;
+      last_ctr = -1;
     }
   }
   _bucket_error = error_count > 0 ? error_sum / error_count : 0.0;
-#endif
 }
 
 void BasicAucCalculator::reset_records() {
@@ -264,20 +324,35 @@ void BasicAucCalculator::add_uid_data(const float* d_pred,
                                       const int64_t* d_uid,
                                       int batch_size,
                                       const paddle::platform::Place& place) {
-  thread_local std::vector<float> h_pred;
-  thread_local std::vector<int64_t> h_label;
-  thread_local std::vector<uint64_t> h_uid;
-  h_pred.resize(batch_size);
-  h_label.resize(batch_size);
-  h_uid.resize(batch_size);
+  if (platform::is_gpu_place(place)) {
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+    thread_local std::vector<float> h_pred;
+    thread_local std::vector<int64_t> h_label;
+    thread_local std::vector<uint64_t> h_uid;
+    h_pred.resize(batch_size);
+    h_label.resize(batch_size);
+    h_uid.resize(batch_size);
 
-  memcpy(h_pred.data(), d_pred, sizeof(float) * batch_size);
-  memcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size);
-  memcpy(h_uid.data(), d_uid, sizeof(uint64_t) * batch_size);
-
-  std::lock_guard<std::mutex> lock(_table_mutex);
-  for (int i = 0; i < batch_size; ++i) {
-    add_uid_unlock_data(h_pred[i], h_label[i], static_cast<uint64_t>(h_uid[i]));
+    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
+            cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_label.data(), d_label, sizeof(float) * batch_size,
+            cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_uid.data(), d_uid, sizeof(float) * batch_size,
+            cudaMemcpyDeviceToHost);
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      add_uid_unlock_data(h_pred[i], h_label[i],
+          static_cast<uint64_t>(h_uid[i]));
+    }
+#else
+    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
+#endif
+  } else {
+    std::lock_guard<std::mutex> lock(_table_mutex);
+    for (int i = 0; i < batch_size; ++i) {
+      add_uid_unlock_data(d_pred[i], d_label[i],
+          static_cast<uint64_t>(d_uid[i]));
+    }
   }
 }
 

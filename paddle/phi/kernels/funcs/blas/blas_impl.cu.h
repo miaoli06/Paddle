@@ -233,7 +233,49 @@ struct CUBlas<double> {
         paddle::platform::dynload::cublasDtrsmBatched(args...));
   }
 };
+template <>
+struct CUBlas<int8_t> {
+  //int8_t call func:
+  //CUBlas<int8_t>::GEMM_EX(
+  //    &cuda_ctx, cuTransB, cuTransA, N, M, K, &h_alpha, B, CUDA_R_8I, ldb, A,
+  //    CUDA_R_8I, lda, &h_beta, C, CUDA_R_32F, N, CUDA_R_32F);
 
+  // NOTES: GEMM_EX can use Tensor Core to accelerate matrix multiply.
+  // https://docs.nvidia.com/cuda/cublas/index.html#cublassetmathmode
+  template <typename... ARGS>
+  static void GEMM_EX(phi::GPUContext *dev_ctx,
+                      cublasOperation_t transa, cublasOperation_t transb, int m,
+                      int n, int k, const void *alpha, const void *A,
+                      cudaDataType_t Atype, int lda, const void *B,
+                      cudaDataType_t Btype, int ldb, const void *beta, void *C,
+                      cudaDataType_t Ctype, int ldc,
+                      cudaDataType_t computeType) {
+#if CUDA_VERSION >= 8000
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DFALT;
+#if CUDA_VERSION >= 9000
+    bool use_tensor_op_math = dev_ctx->tensor_core_available();
+    if (use_tensor_op_math) {
+      //algo = CUBLAS_GEMM_DFALT_TENSOR_OP;
+      //VLOG(5) << "2. CUBlas int8_t, algo is CUBLAS_GEMM_DFALT_TENSOR_OP.";
+      algo = CUBLAS_GEMM_DFALT; // only for int8 gemm
+    }
+    VLOG(5) << "use_tensor_op_math: "
+            << (use_tensor_op_math ? "True" : "False");
+    VLOG(5) << "3. use_tensor_op_math: " << (use_tensor_op_math ? "True" : "False");
+    algo = CUBLAS_GEMM_DFALT;
+#endif  // CUDA_VERSION >= 9000
+
+    dev_ctx->TensorCoreCublasCallIfAvailable([&](cublasHandle_t handle) {
+      PADDLE_ENFORCE_GPU_SUCCESS(paddle::platform::dynload::cublasGemmEx(
+          handle, transa, transb, m, n, k, alpha, A, Atype, lda, B, Btype, ldb,
+          beta, C, Ctype, ldc, computeType, algo));
+    });
+#else
+    PADDLE_THROW(platform::errors::Unimplemented(
+        "cublasGemmEx is not supported on cuda <= 7.5"));
+#endif
+  }
+};
 template <>
 struct CUBlas<phi::dtype::float16> {
   using float16 = phi::dtype::float16;
@@ -916,6 +958,60 @@ void Blas<phi::GPUContext>::GEMM(CBLAS_TRANSPOSE transA,
 
 #if CUDA_VERSION >= 8000
   }
+#endif  // CUDA_VERSION >= 8000
+}
+
+//int8_t matmul
+template <>
+template <>
+inline void Blas<phi::GPUContext>::GEMM(
+    CBLAS_TRANSPOSE transA,
+    CBLAS_TRANSPOSE transB,
+    int M,
+    int N,
+    int K,
+    float alpha,
+    const int8_t *A,
+    const int8_t *B,
+    float beta,
+    float *C, int flag) const {
+  // Note that cublas follows fortran order, so the order is different from
+  // the cblas convention.
+  int lda = (transA == CblasNoTrans) ? K : M;
+  int ldb = (transB == CblasNoTrans) ? N : K;
+  cublasOperation_t cuTransA =
+      (transA == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  cublasOperation_t cuTransB =
+      (transB == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+
+  PADDLE_ENFORCE_GE(
+      context_.GetComputeCapability(), 53,
+      phi::errors::InvalidArgument(
+          "cublas int8_t gemm requires GPU compute capability >= 53,"
+          "but received %d",
+          context_.GetComputeCapability()));
+
+  float h_alpha = static_cast<float>(alpha);
+  float h_beta = static_cast<float>(beta);
+
+#if CUDA_VERSION >= 8000
+  // cublasHgemm does true FP16 computation which is slow for non-Volta
+  // GPUs. So use cublasGemmEx instead which does pesudo FP16 computation:
+  // input/output in fp16, computation in fp32, which can also be accelerated
+  // using tensor cores in volta GPUs.
+  auto &cuda_ctx = const_cast<phi::GPUContext &>(context_);
+  VLOG(3) << "1. call int8_t GEMM_EX.";
+  CUBlas<int8_t>::GEMM_EX(
+      &cuda_ctx, cuTransB, cuTransA, N, M, K, &h_alpha, B, CUDA_R_8I, ldb, A,
+      CUDA_R_8I, lda, &h_beta, C, CUDA_R_32F, N, CUDA_R_32F);
+#else
+  // CUDA 7.5 does not support cublasGemmEx, hence we fall back to use hgemm
+
+  //context_.CublasCall([&](cublasHandle_t handle) {
+  //  CUBlas<platform::float16>::GEMM(handle, cuTransB, cuTransA, N, M, K,
+  //                                  &h_alpha, h_B, ldb, h_A, lda, &h_beta, h_C,
+  //                                  N);
+  //});
 #endif  // CUDA_VERSION >= 8000
 }
 

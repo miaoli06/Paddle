@@ -65,18 +65,17 @@ class RetryAllocator : public Allocator {
 
   std::atomic<size_t> waited_allocate_size_{0};
 };
-using Allocation = phi::Allocation;
 class SampleAllocator : public Allocator {
   /**
    * Descriptor for device memory allocations
    */
   struct BlockDescriptor {
-    Allocation *d_ptr;  // Device pointer
+    phi::Allocation *d_ptr;  // Device pointer
     size_t bytes;       // Size of allocation in bytes
     size_t used;        // Real used
     unsigned int bin;   // Bin enumeration
 
-    explicit BlockDescriptor(Allocation *ptr);
+    explicit BlockDescriptor(phi::Allocation *ptr);
     BlockDescriptor();
     static bool ptrcompare(const BlockDescriptor &a, const BlockDescriptor &b);
     static bool sizecompare(const BlockDescriptor &a, const BlockDescriptor &b);
@@ -106,8 +105,8 @@ class SampleAllocator : public Allocator {
   }
 
  protected:
-  void FreeImpl(Allocation *allocation) override;
-  Allocation *AllocateImpl(size_t size) override;
+  void FreeImpl(phi::Allocation *allocation) override;
+  phi::Allocation *AllocateImpl(size_t size) override;
   uint64_t ReleaseImpl(const platform::Place &place) override {
     FreeAllCache();
     return allocator_->Release(place);

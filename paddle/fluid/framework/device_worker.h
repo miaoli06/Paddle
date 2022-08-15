@@ -46,6 +46,10 @@ limitations under the License. */
 #include "paddle/fluid/platform/timer.h"
 #include "paddle/phi/backends/dynload/port.h"
 
+#ifdef PADDLE_WITH_BOX_PS
+#include "paddle/phi/core/utils/rw_lock.h"
+#endif
+
 namespace paddle {
 namespace framework {
 class ProgramDesc;
@@ -830,7 +834,7 @@ class BoxPSAsynDenseTable {
   std::vector<size_t> thread_end_index_;
   std::shared_ptr<paddle::framework::ThreadPool> thread_pool = nullptr;
   int thread_num_ = 0;
-  RWLock ps_lock_;
+  phi::RWLock ps_lock_;
   std::thread* update_thread_ = nullptr;
   float base_lr_ = -1;
 };

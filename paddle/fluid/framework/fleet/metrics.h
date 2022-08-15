@@ -14,8 +14,6 @@ limitations under the License. */
 
 #pragma once
 
-#include <ThreadPool.h>
-
 #include <atomic>
 #include <ctime>
 #include <map>
@@ -40,92 +38,105 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/gloo_wrapper.h"
 #endif
 
-#if defined(PADDLE_WITH_PSLIB) || defined(PADDLE_WITH_PSCORE)
+#if defined(PADDLE_WITH_PSLIB) || defined(PADDLE_WITH_PSCORE) || defined(PADDLE_WITH_BOX_PS)
 namespace paddle {
-
 namespace framework {
 
 class BasicAucCalculator {
  public:
-  BasicAucCalculator() {}
   struct WuaucRecord {
     uint64_t uid_;
     int label_;
     float pred_;
   };
-
   struct WuaucRocData {
     double tp_;
     double fp_;
     double auc_;
   };
-  void init(int table_size);
-  void init_wuauc(int table_size);
+  explicit BasicAucCalculator(bool mode_collect_in_gpu = false) {}
+  void init(int table_size, int max_batch_size = 0);
   void reset();
-  void reset_records();
   // add single data in CPU with LOCK, deprecated
   void add_unlock_data(double pred, int label);
-  void add_uid_unlock_data(double pred, int label, uint64_t uid);
+  void add_unlock_data(double pred, int label, float sample_scale);
   // add batch data
-  void add_data(const float* d_pred,
-                const int64_t* d_label,
-                int batch_size,
+  void add_data(const float* d_pred, const int64_t* d_label, int batch_size,
                 const paddle::platform::Place& place);
   // add mask data
-  void add_mask_data(const float* d_pred,
-                     const int64_t* d_label,
-                     const int64_t* d_mask,
-                     int batch_size,
+  void add_mask_data(const float* d_pred, const int64_t* d_label,
+                     const int64_t* d_mask, int batch_size,
                      const paddle::platform::Place& place);
+  // add sample data
+  void add_sample_data(const float* d_pred, const int64_t* d_label,
+                       const std::vector<float>& d_sample_scale, int batch_size,
+                       const paddle::platform::Place& place);
   // add uid data
-  void add_uid_data(const float* d_pred,
-                    const int64_t* d_label,
-                    const int64_t* d_uid,
-                    int batch_size,
-                    const paddle::platform::Place& place);
-
+  void add_uid_data(const float* d_pred, const int64_t* d_label,
+                     const int64_t* d_uid, int batch_size,
+                     const paddle::platform::Place& place);
   void compute();
-  void computeWuAuc();
-  WuaucRocData computeSingelUserAuc(const std::vector<WuaucRecord>& records);
   int table_size() const { return _table_size; }
   double bucket_error() const { return _bucket_error; }
   double auc() const { return _auc; }
-  double uauc() const { return _uauc; }
-  double wuauc() const { return _wuauc; }
   double mae() const { return _mae; }
   double actual_ctr() const { return _actual_ctr; }
   double predicted_ctr() const { return _predicted_ctr; }
-  double user_cnt() const { return _user_cnt; }
-  double size() const { return _size; }
   double rmse() const { return _rmse; }
-  std::unordered_set<uint64_t> uid_keys() const { return _uid_keys; }
+  std::vector<double>& get_negative() { return _table[0]; }
+  std::vector<double>& get_postive() { return _table[1]; }
+  double& local_abserr() { return _local_abserr; }
+  double& local_sqrerr() { return _local_sqrerr; }
+  double& local_pred() { return _local_pred; }
   // lock and unlock
   std::mutex& table_mutex(void) { return _table_mutex; }
 
+ public:
+  void reset_records();
+  void add_uid_unlock_data(double pred, int label, uint64_t uid);
+  void computeWuAuc();
+  WuaucRocData computeSingelUserAuc(const std::vector<WuaucRecord>& records);
+  double uauc() const { return _uauc; }
+  double wuauc() const { return _wuauc; }
+  double user_cnt() const { return _user_cnt; }
+  double size() const { return _size; }
+
  private:
-  void calculate_bucket_error();
+  void cuda_add_data(const paddle::platform::Place& place, const int64_t* label,
+                     const float* pred, int len);
+  void cuda_add_mask_data(const paddle::platform::Place& place,
+                          const int64_t* label, const float* pred,
+                          const int64_t* mask, int len);
+  void calculate_bucket_error(const double *neg_table,
+      const double *pos_table);
 
  protected:
   double _local_abserr = 0;
   double _local_sqrerr = 0;
   double _local_pred = 0;
   double _auc = 0;
-  double _uauc = 0;
-  double _wuauc = 0;
   double _mae = 0;
   double _rmse = 0;
   double _actual_ctr = 0;
   double _predicted_ctr = 0;
-  double _size;
-  double _user_cnt = 0;
   double _bucket_error = 0;
-  std::unordered_set<uint64_t> _uid_keys;
+
+  double _size = 0.0;
+  double _user_cnt = 0;
+  double _uauc = 0;
+  double _wuauc = 0;
+  std::vector<WuaucRecord> wuauc_records_;
 
  private:
   void set_table_size(int table_size) { _table_size = table_size; }
-  int _table_size;
+  void set_max_batch_size(int max_batch_size) {
+    _max_batch_size = max_batch_size;
+  }
+  void collect_data_nccl();
+  void copy_data_d2h(int device);
+  int _table_size = 0;
+  int _max_batch_size = 0;
   std::vector<double> _table[2];
-  std::vector<WuaucRecord> wuauc_records_;
   static constexpr double kRelativeErrorBound = 0.05;
   static constexpr double kMaxSpan = 0.01;
   std::mutex _table_mutex;

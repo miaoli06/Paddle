@@ -68,7 +68,9 @@ REGISTER_DEVICE_WORKER_CLASS(HogwildWorker);
 REGISTER_DEVICE_WORKER_CLASS(DownpourWorker);
 REGISTER_DEVICE_WORKER_CLASS(DownpourWorkerOpt);
 
-#if defined(PADDLE_WITH_PSCORE)
+#ifdef PADDLE_WITH_BOX_PS
+REGISTER_DEVICE_WORKER_CLASS(BoxPSWorker);
+#elif defined(PADDLE_WITH_PSCORE)
 REGISTER_DEVICE_WORKER_CLASS(DownpourLiteWorker);
 REGISTER_DEVICE_WORKER_CLASS(HeterSectionWorker);
 #endif
@@ -87,9 +89,5 @@ REGISTER_DEVICE_WORKER_CLASS(PSGPUWorker);
     defined(PADDLE_WITH_ASCEND_CL)
 REGISTER_DEVICE_WORKER_CLASS(SectionWorker);
 #endif
-#ifdef PADDLE_WITH_BOX_PS
-REGISTER_DEVICE_WORKER_CLASS(BoxPSWorker);
-#endif
-
 }  // namespace framework
 }  // namespace paddle

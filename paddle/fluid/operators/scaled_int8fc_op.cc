@@ -135,7 +135,7 @@ class ScaledINT8FCGradOpMaker : public framework::SingleGradOpMaker<T> {
 
 }  // namespace operators
 }  // namespace paddle
-
+using CPUCtx = phi::CPUContext;
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(scaled_int8fc, ops::ScaledINT8FCOp, ops::ScaledINT8FCOpMaker,
                   ops::ScaledINT8FCGradOpMaker<paddle::framework::OpDesc>,
@@ -144,5 +144,5 @@ REGISTER_OPERATOR(scaled_int8fc, ops::ScaledINT8FCOp, ops::ScaledINT8FCOpMaker,
 REGISTER_OPERATOR(scaled_int8fc_grad, ops::ScaledINT8FCGradOp);
 
 REGISTER_OP_CPU_KERNEL(
-    scaled_int8fc, ops::ScaledINT8FCKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::ScaledINT8FCKernel<paddle::platform::CPUDeviceContext, double>);
+    scaled_int8fc, ops::ScaledINT8FCKernel<CPUCtx, float>,
+    ops::ScaledINT8FCKernel<CPUCtx, double>);

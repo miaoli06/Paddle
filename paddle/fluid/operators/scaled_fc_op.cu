@@ -16,10 +16,11 @@ limitations under the License. */
 #include <string>
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/operators/scaled_fc_op.h"
-#include "paddle/fluid/operators/math/blas.h"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+
+using GPUCtx = phi::GPUContext;
 
 namespace paddle {
 namespace operators {
@@ -162,7 +163,7 @@ class ScaledFCCUDAKernel : public framework::OpKernel<T> {
     output->mutable_data<T>(ctx.GetPlace());
     output->Resize({ins_num, w_dims[1]});
 
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
+    auto& dev_ctx = ctx.template device_context<GPUCtx>();
     // cast and pad
     const unsigned int insnum_ori = ins_num;
     const unsigned int infea_ori = in_feat;
@@ -200,29 +201,16 @@ class ScaledFCCUDAKernel : public framework::OpKernel<T> {
     CBLAS_TRANSPOSE transA = CblasNoTrans;
     CBLAS_TRANSPOSE transB = CblasNoTrans;
 
-    //auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
-    //auto blas = math::GetBlas<platform::CUDADeviceContext, T>(dev_ctx);
-    auto blas = math::GetBlas<platform::CUDADeviceContext, paddle::platform::float16>(dev_ctx);
+    auto blas = phi::funcs::GetBlas<GPUCtx, paddle::platform::float16>(dev_ctx);
 
-    //T alpha = static_cast<T>(input_scale_factor);
-    //T bias_scale_factor_use = static_cast<T>(bias_scale_factor);
-    //T beta = static_cast<T>(0.0);
     paddle::platform::float16 alpha = static_cast<paddle::platform::float16>(input_scale_factor);
     paddle::platform::float16 bias_scale_factor_use = static_cast<paddle::platform::float16>(bias_scale_factor);
     paddle::platform::float16 beta = static_cast<paddle::platform::float16>(0.0);
 
-    //blas.GEMM(transA, transB, ins_num, out_feat, in_feat, alpha, input->data<T>(), w->data<T>(), beta, output->data<T>());
-    //blas.GEMM(transA, transB, insnum_pad, outfea_pad, infea_pad, alpha, input_help->data<paddle::platform::float16>(), w_help->data<paddle::platform::float16>(), beta, output_help->data<paddle::platform::float16>());
     blas.GEMM(transA, transB, insnum_pad, outfea_pad, infea_pad, alpha, input_help.data<paddle::platform::float16>(), w_help.data<paddle::platform::float16>(), beta, output_help.mutable_data<paddle::platform::float16>(ctx.GetPlace()));
-    //blas.GEMM(transA, transB, insnum_pad, outfea_pad, infea_pad, alpha, &input_help, &w_help, beta, &output_help);
-    //vec_mat_row_add<T>(ctx.cuda_device_context().stream(), ins_num, w_dims[1],
-    //                   output->data<T>(), bias->data<T>(), bias_scale_factor_use);
-    //vec_mat_row_add<paddle::platform::float16>(ctx.cuda_device_context().stream(), insnum_pad, outfea_pad,
-    //                   output_help->data<paddle::platform::float16>(), bias_help->data<paddle::platform::float16>(), bias_scale_factor_use);
     vec_mat_row_add<paddle::platform::float16>(ctx.cuda_device_context().stream(), insnum_pad, outfea_pad,
                        output_help.data<paddle::platform::float16>(), bias_help.data<paddle::platform::float16>(), bias_scale_factor_use);
 
-    //cast_and_cut<T>(ctx.cuda_device_context().stream(), insnum_ori, outfea_ori, insnum_pad, outfea_pad, output->data<T>(), output_help->data<paddle::platform::float16>());
     T scale_factor = static_cast<T>(1 / input_scale_factor);
     VLOG(3) << "input_scale_factor=" << input_scale_factor
             << ", bias_scale_factor_use=" << bias_scale_factor_use
@@ -230,8 +218,6 @@ class ScaledFCCUDAKernel : public framework::OpKernel<T> {
     cast_and_cut<T>(ctx.cuda_device_context().stream(), insnum_ori, outfea_ori, insnum_pad, outfea_pad, output->data<T>(), output_help.data<paddle::platform::float16>(), scale_factor);
     VLOG(3) << "output_help dim0=" << output_help.dims()[0] << ", output_help dim1=" << output_help.dims()[1]
             << ", output dim0=" << output->dims()[0] << ", output dim1=" << output->dims()[1];
-    //cast_and_cut<T>(ctx.cuda_device_context().stream(), insnum_ori, outfea_ori, insnum_pad, outfea_pad, output->data<T>(), &output_help);
-
   }
 };
 
@@ -247,11 +233,8 @@ class ScaledFCGradOpCUDAKernel : public framework::OpKernel<T> {
     auto bias_scale_factor = ctx.Attr<float>("bias_scale_factor");
     auto grad_scale_factor = ctx.Attr<float>("grad_scale_factor");
 
-    //T alpha = static_cast<T>(input_scale_factor);
     T bias_scale_factor_use = static_cast<T>(bias_scale_factor);
-    //T beta = static_cast<T>(0.0);
     paddle::platform::float16 alpha = static_cast<paddle::platform::float16>(input_scale_factor);
-    //paddle::platform::float16 bias_scale_factor_use = static_cast<paddle::platform::float16>(bias_scale_factor);
     paddle::platform::float16 beta = static_cast<paddle::platform::float16>(0.0);
 
     auto* dx = ctx.Output<Tensor>(framework::GradVarName("Input"));
@@ -265,23 +248,18 @@ class ScaledFCGradOpCUDAKernel : public framework::OpKernel<T> {
     auto dout_coln = dout_dims[1];
     auto ins_num = dout_dims[0];
 
-    auto& dev_ctx = ctx.template device_context<platform::CUDADeviceContext>();
-    auto& place = *ctx.template device_context<platform::CUDADeviceContext>()
-                       .eigen_device();
+    auto& dev_ctx = ctx.template device_context<GPUCtx>();
     auto stream = ctx.cuda_device_context().stream();
 
     // initialize
     dx->mutable_data<T>(ctx.GetPlace());
-    auto dx_eigen = framework::EigenVector<T>::Flatten(*dx);
-    dx_eigen.device(place) = dx_eigen.constant(static_cast<T>(0));
+    phi::funcs::set_constant(dev_ctx, dx, 0.0);
 
     dw->mutable_data<T>(ctx.GetPlace());
-    auto dw_eigen = framework::EigenVector<T>::Flatten(*dw);
-    dw_eigen.device(place) = dw_eigen.constant(static_cast<T>(0));
+    phi::funcs::set_constant(dev_ctx, dw, 0.0);
 
     db->mutable_data<T>(ctx.GetPlace());
-    auto db_eigen = framework::EigenVector<T>::Flatten(*db);
-    db_eigen.device(place) = db_eigen.constant(static_cast<T>(0));
+    phi::funcs::set_constant(dev_ctx, db, 0.0);
 
     // get bias grad
     col_sum_mat(stream, ins_num, dout_coln, dout->data<T>(), db->data<T>(), bias_scale_factor_use);
@@ -319,13 +297,11 @@ class ScaledFCGradOpCUDAKernel : public framework::OpKernel<T> {
     T scale = static_cast<T>(1.0);
     cast_and_padding<T>(ctx.cuda_device_context().stream(), insnum_ori, infea_ori, insnum_pad, infea_pad, input->data<T>(), input_help.mutable_data<paddle::platform::float16>(ctx.GetPlace()), scale);
     cast_and_padding<T>(ctx.cuda_device_context().stream(), infea_ori, outfea_ori, infea_pad, outfea_pad, w->data<T>(), w_help.mutable_data<paddle::platform::float16>(ctx.GetPlace()), scale);
-    //cast_and_padding<T>(ctx.cuda_device_context().stream(), insnum_ori, outfea_ori, insnum_pad, outfea_pad, dout->data<T>(), dout_help.mutable_data<paddle::platform::float16>(ctx.GetPlace()));
-    //T grad_scale_factor = static_cast<T>(256.0) * static_cast<T>(1 / input_scale_factor);
     T dout_grad_scale_factor = static_cast<T>(grad_scale_factor) * static_cast<T>(1 / input_scale_factor);
     cast_and_padding<T>(ctx.cuda_device_context().stream(), insnum_ori, outfea_ori, insnum_pad, outfea_pad, dout->data<T>(), dout_help.mutable_data<paddle::platform::float16>(ctx.GetPlace()), dout_grad_scale_factor);
 
     
-    auto blas = math::GetBlas<platform::CUDADeviceContext, paddle::platform::float16>(dev_ctx);
+    auto blas = phi::funcs::GetBlas<GPUCtx, paddle::platform::float16>(dev_ctx);
     //dx = dy * w^T
     blas.GEMM(CblasNoTrans, CblasTrans, insnum_pad, infea_pad, outfea_pad, alpha, dout_help.data<paddle::platform::float16>(), w_help.data<paddle::platform::float16>(), beta, dx_help.mutable_data<paddle::platform::float16>(ctx.GetPlace()));
     //dw = x^T * dy
@@ -344,24 +320,6 @@ class ScaledFCGradOpCUDAKernel : public framework::OpKernel<T> {
     cast_and_cut<T>(ctx.cuda_device_context().stream(), infea_ori, outfea_ori, infea_pad, outfea_pad, dw->data<T>(), dw_help.data<paddle::platform::float16>(), scale_factor);
 
     // end cast and pad
-
-    /*
-    // input & weight grad
-    auto blas = math::GetBlas<platform::CUDADeviceContext, T>(dev_ctx);
-    
-    auto input_mat = static_cast<const Tensor&>(*input);
-    auto w_mat = static_cast<const Tensor&>(*w);
-    auto dout_mat = static_cast<const Tensor&>(*dout);
-
-    // dx = dout_data * y^T, ins_num*in_feat
-    //dout_data : ins_num*out_feat
-    //blas.GEMM(CblasNoTrans, CblasTrans, dout_dims[0], w_dims[0], w_dims[1], alpha, dout.data<T>(), w.data<T>(), beta, dx.data<T>());
-    blas.GEMM(CblasNoTrans, CblasTrans, dout_dims[0], w_dims[0], w_dims[1], alpha, dout_mat.data<T>(), w_mat.data<T>(), beta, dx->data<T>());
-    
-    // dy = x^T * dout_data
-    //blas.GEMM(CblasTrans, CblasNoTrans, input_dims[1], dout_dims[1], input_dims[0], alpha, input.data<T>(), dout.data<T>(), beta, dw->data<T>());
-    blas.GEMM(CblasTrans, CblasNoTrans, input_dims[1], dout_dims[1], input_dims[0], alpha, input_mat.data<T>(), dout_mat.data<T>(), beta, dw->data<T>());
-    */
   }
 };
 
@@ -369,7 +327,6 @@ class ScaledFCGradOpCUDAKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-using GPUCtx = paddle::platform::CUDADeviceContext;
 REGISTER_OP_CUDA_KERNEL(scaled_fc, ops::ScaledFCCUDAKernel<GPUCtx, float>,
                         ops::ScaledFCCUDAKernel<GPUCtx, double>);
                         //ops::ScaledFCCUDAKernel<GPUCtx, paddle::platform::float16>);

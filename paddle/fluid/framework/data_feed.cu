@@ -15,7 +15,7 @@ limitations under the License. */
 #else
 #define _LINUX
 #endif
-#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS)
+#if defined(PADDLE_WITH_CUDA)
 
 #include "paddle/fluid/framework/data_feed.h"
 #include <thrust/device_ptr.h>
@@ -41,6 +41,8 @@ const int CUDA_NUM_THREADS = 512;
 inline int GET_BLOCKS(const int N) {
   return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
 }
+
+#if defined(PADDLE_WITH_HETERPS)
 // fill slot values
 __global__ void FillSlotValueOffsetKernel(const int ins_num,
                                           const int used_slot_num,
@@ -1196,7 +1198,7 @@ void GraphDataGenerator::SetConfig(
     }
   }
 };
-
+#endif
 
 #ifdef PADDLE_WITH_BOX_PS
 // fill slot values
@@ -1239,10 +1241,9 @@ void SlotPaddleBoxDataFeed::FillSlotValueOffset(
     const int *uint64_offsets, const int uint64_slot_size,
     const int *float_offsets, const int float_slot_size,
     const UsedSlotGpuType *used_slots) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                    platform::DeviceContextPool::Instance().Get(
-                        boost::get<platform::CUDAPlace>(this->place_)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(this->place_))
+          ->stream();
   FillSlotValueOffsetPadBoxKernel<<<GET_BLOCKS(used_slot_num), CUDA_NUM_THREADS, 0,
                               stream>>>(
       ins_num, used_slot_num, slot_value_offsets, uint64_offsets,
@@ -1298,10 +1299,9 @@ void SlotPaddleBoxDataFeed::CopyForTensor(
     const int uint64_slot_size, const float *float_feas,
     const int *float_offsets, const int *float_ins_lens,
     const int float_slot_size, const UsedSlotGpuType *used_slots) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                    platform::DeviceContextPool::Instance().Get(
-                        boost::get<platform::CUDAPlace>(this->place_)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(this->place_))
+          ->stream();
 
   CopyForTensorPadBoxKernel<<<GET_BLOCKS(used_slot_num * ins_num), CUDA_NUM_THREADS,
                         0, stream>>>(
@@ -1368,10 +1368,9 @@ void SlotPaddleBoxDataFeed::CopyRankOffset(int *dest, const int ins_num,
                                            const int *ranks, const int *cmatchs,
                                            const int *ad_offsets,
                                            const int cols) {
-  auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                    platform::DeviceContextPool::Instance().Get(
-                        boost::get<platform::CUDAPlace>(this->place_)))
-                    ->stream();
+  auto stream = dynamic_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(this->place_))
+          ->stream();
   cudaMemsetAsync(dest, -1, sizeof(int) * ins_num * cols, stream);
   CopyRankOffsetKernel<<<GET_BLOCKS(pv_num), CUDA_NUM_THREADS, 0, stream>>>(
       dest, ins_num, pv_num, max_rank, ranks, cmatchs, ad_offsets, cols);

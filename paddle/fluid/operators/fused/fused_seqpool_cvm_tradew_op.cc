@@ -73,7 +73,7 @@ class FusedSeqpoolCVMTradeWOp : public framework::OperatorWithKernel {
       } else {
         out_dim = {-1, dims[rank - 1] - cvm_offset - trade_num};
       }
-      outs_dims[i] = framework::make_ddim(out_dim);
+      outs_dims[i] = phi::make_ddim(out_dim);
     }
     ctx->SetOutputsDim("Out", outs_dims);
   }

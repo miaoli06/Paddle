@@ -212,14 +212,23 @@ void CastPyArg2AttrFloat(PyObject* obj,
   attrs[key] = CastPyArg2Float(obj, op_type, arg_pos);
 }
 
+std::string CastPyArg2String(PyObject* obj) {
+    Py_ssize_t size;
+#if PY_VERSION_HEX >= 0x03050000
+    const char* data = NULL;
+    data = PyUnicode_AsUTF8AndSize(obj, &size);
+#else
+    char* data = NULL;
+    PyString_AsStringAndSize(PyUnicode_AsUTF8String(obj), &data, &size);
+#endif
+    return std::string(data, (size_t)size);  // NOLINT
+}
+
 std::string CastPyArg2String(PyObject* obj,
                              const std::string& op_type,
                              ssize_t arg_pos) {
   if (PyObject_CheckString(obj)) {
-    Py_ssize_t size;
-    const char* data;
-    data = PyUnicode_AsUTF8AndSize(obj, &size);
-    return std::string(data, (size_t)size);  // NOLINT
+    return CastPyArg2String(obj);
   } else {
     PADDLE_THROW(platform::errors::InvalidArgument(
         "%s(): argument (position %d) must be "
@@ -611,10 +620,7 @@ std::vector<std::string> CastPyArg2Strings(PyObject* obj,
     for (Py_ssize_t i = 0; i < len; i++) {
       item = PyList_GetItem(obj, i);
       if (PyObject_CheckString(item)) {
-        Py_ssize_t size;
-        const char* data;
-        data = PyUnicode_AsUTF8AndSize(item, &size);
-        value.emplace_back(std::string(data, (size_t)size));  // NOLINT
+        value.emplace_back(CastPyArg2String(item));  // NOLINT
       } else {
         PADDLE_THROW(platform::errors::InvalidArgument(
             "%s(): argument (position %d) must be "
@@ -631,10 +637,7 @@ std::vector<std::string> CastPyArg2Strings(PyObject* obj,
     for (Py_ssize_t i = 0; i < len; i++) {
       item = PyTuple_GetItem(obj, i);
       if (PyObject_CheckString(item)) {
-        Py_ssize_t size;
-        const char* data;
-        data = PyUnicode_AsUTF8AndSize(item, &size);
-        value.emplace_back(std::string(data, (size_t)size));  // NOLINT
+        value.emplace_back(CastPyArg2String(item));  // NOLINT
       } else {
         PADDLE_THROW(platform::errors::InvalidArgument(
             "%s(): argument (position %d) must be "
@@ -703,13 +706,12 @@ void ConstructAttrMapFromPyArgs(
 
   auto attr_type_map = &(OpAttrTypeMap::Instance().Map()[op_type]);
 
+  std::string key;
   PyObject* obj = nullptr;
   for (ssize_t arg_pos = attr_start; arg_pos < attr_end; arg_pos += 2) {
-    Py_ssize_t key_len;
-    const char* key_ptr;
     obj = PyTuple_GET_ITEM(args, arg_pos);
     if (PyObject_CheckString(obj)) {
-      key_ptr = PyUnicode_AsUTF8AndSize(obj, &key_len);
+      key = CastPyArg2String(obj);
     } else {
       PADDLE_THROW(platform::errors::InvalidArgument(
           "%s(): argument (position %d) must be str, but got "
@@ -719,7 +721,6 @@ void ConstructAttrMapFromPyArgs(
           ((PyTypeObject*)obj->ob_type)->tp_name));  // NOLINT
     }
 
-    std::string key(key_ptr, (size_t)key_len);  // NOLINT
     auto iter = attr_type_map->find(key);
     if (iter == attr_type_map->end()) {
       continue;

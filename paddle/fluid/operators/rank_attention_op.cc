@@ -289,7 +289,7 @@ DECLARE_NO_NEED_BUFFER_VARS_INFERER(
 
 }  // namespace operators
 }  // namespace paddle
-
+using CPUCtx = phi::CPUContext;
 namespace ops = paddle::operators;
 REGISTER_OPERATOR(rank_attention, ops::RankAttentionOp,
                   ops::RankAttentionOpMaker,
@@ -309,10 +309,10 @@ REGISTER_OPERATOR(rank_attention2_grad, ops::RankAttention2GradOp,
 
 REGISTER_OP_CPU_KERNEL(
     rank_attention,
-    ops::RankAttentionKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::RankAttentionKernel<paddle::platform::CPUDeviceContext, double>);
+    ops::RankAttentionKernel<CPUCtx, float>,
+    ops::RankAttentionKernel<CPUCtx, double>);
 
 REGISTER_OP_CPU_KERNEL(
     rank_attention2,
-    ops::RankAttentionKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::RankAttentionKernel<paddle::platform::CPUDeviceContext, double>);
+    ops::RankAttentionKernel<CPUCtx, float>,
+    ops::RankAttentionKernel<CPUCtx, double>);

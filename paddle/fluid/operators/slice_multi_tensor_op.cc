@@ -17,7 +17,7 @@
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/var_type.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 #include "paddle/fluid/platform/device_memory_aligment.h"
 
 namespace paddle {
@@ -127,21 +127,21 @@ slice_multi_tensor is used split one ternsor to mulit child tensor
 
 namespace ops = paddle::operators;
 namespace plat = paddle::platform;
-
+using CPUCtx = phi::CPUContext;
 REGISTER_OPERATOR(slice_multi_tensor, paddle::operators::SliceMultiTensorOp,
                   paddle::operators::SliceMultiTensorOpMaker);
 REGISTER_OP_CPU_KERNEL(
     slice_multi_tensor,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CPUDeviceContext, int>,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CPUDeviceContext, double>);
+    ops::SliceMultiTensorOpKernel<CPUCtx, int>,
+    ops::SliceMultiTensorOpKernel<CPUCtx, float>,
+    ops::SliceMultiTensorOpKernel<CPUCtx, double>);
 
 #ifdef PADDLE_WITH_CUDA
+using GPUCtx = phi::GPUContext;
 REGISTER_OP_CUDA_KERNEL(
     slice_multi_tensor,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CUDADeviceContext,
-                                  plat::float16>,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CUDADeviceContext, int>,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CUDADeviceContext, float>,
-    ops::SliceMultiTensorOpKernel<paddle::platform::CUDADeviceContext, double>);
+    ops::SliceMultiTensorOpKernel<GPUCtx, plat::float16>,
+    ops::SliceMultiTensorOpKernel<GPUCtx, int>,
+    ops::SliceMultiTensorOpKernel<GPUCtx, float>,
+    ops::SliceMultiTensorOpKernel<GPUCtx, double>);
 #endif

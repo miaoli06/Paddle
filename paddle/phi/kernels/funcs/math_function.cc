@@ -144,7 +144,8 @@ struct TensorSetConstantCPU {
   void apply() const {
     auto cpu = phi::CPUPlace();
     auto* begin = tensor_->mutable_data<T>(cpu);
-    std::fill(begin, begin + tensor_->numel(), static_cast<T>(*value_));
+    const T* num = reinterpret_cast<const T*>(value_);
+    std::fill(begin, begin + tensor_->numel(), static_cast<T>(*num));
   }
   paddle::framework::Tensor* tensor_;
   const void* value_;

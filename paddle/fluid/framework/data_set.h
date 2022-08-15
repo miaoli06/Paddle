@@ -297,6 +297,8 @@ class DatasetImpl : public Dataset {
     return gpu_graph_total_keys_;
   }
   Channel<T>& GetInputChannelRef() { return input_channel_; }
+  // aucrunner need
+  virtual std::vector<T>& GetInputRecord() { return input_records_; }
   // disable shuffle
   virtual void SetDiablePolling(bool disable) {}
   virtual void SetDisableShuffle(bool disable) {}

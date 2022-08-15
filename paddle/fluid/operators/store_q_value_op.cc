@@ -21,7 +21,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/tensor.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace operators {
@@ -40,7 +40,7 @@ class StoreQValueOpKernel : public framework::OpKernel<T> {
         ctx.MultiInput<LoDTensor>("Ids");  // std::vector<const Tensor*>
     auto ctx_place = ctx.GetPlace();
 
-    int device_id = boost::get<platform::CUDAPlace>(ctx_place).GetDeviceId();
+    int device_id = ctx_place.GetDeviceId();
     const auto qvalues_size = inputs.size();
     std::vector<framework::Tensor> cpu_qvalues(qvalues_size);
 

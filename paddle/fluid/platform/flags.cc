@@ -953,6 +953,16 @@ PADDLE_DEFINE_EXPORTED_bool(enbale_slotpool_auto_clear, false,
             "slot pool enable auto clear, default false");
 PADDLE_DEFINE_EXPORTED_bool(enable_ins_parser_add_file_path, false,
             "enable parser ins add path param, default false");
+PADDLE_DEFINE_EXPORTED_int32(padbox_record_pool_max_size, 2000000,
+             "PadBoxSlotDataset slot record pool max size");
+PADDLE_DEFINE_EXPORTED_int32(padbox_slotrecord_extend_dim,
+             2, "SlotRecord extend dim size");
+PADDLE_DEFINE_EXPORTED_int32(fix_dayid, 0, "Whether fix dayid in PaddleBox");
+PADDLE_DEFINE_EXPORTED_int32(padbox_slotpool_thread_num, 1,
+             "PadBoxSlotDataset slot pool thread num");
+PADDLE_DEFINE_EXPORTED_bool(use_gpu_replica_cache, false,
+            "if true ,will open use_gpu_replica_cache");
+PADDLE_DEFINE_EXPORTED_int32(gpu_replica_cache_dim, 8, "use_gpu_replica_cache,the dim");
 
 PADDLE_DEFINE_EXPORTED_bool(
     gpugraph_enable_hbm_table_collision_stat,

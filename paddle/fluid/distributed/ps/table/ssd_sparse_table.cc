@@ -451,9 +451,11 @@ int32_t SSDSparseTable::PushSparse(const uint64_t* keys,
 }
 
 int32_t SSDSparseTable::Shrink(const std::string& param) {
+#if defined(PADDLE_WITH_MKLML)
   int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (int i = 0; i < _real_local_shard_num; ++i) {
     uint64_t mem_count = 0;
     uint64_t ssd_count = 0;
@@ -549,14 +551,15 @@ int32_t SSDSparseTable::Save(const std::string& path,
   std::string table_path = TableDir(path);
   _afs_client.remove(paddle::string::format_string(
       "%s/part-%03d-*", table_path.c_str(), _shard_idx));
-  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
 
   // std::atomic<uint32_t> feasign_size;
   std::atomic<uint32_t> feasign_size_all{0};
   // feasign_size = 0;
-
+#if defined(PADDLE_WITH_MKLML)
+  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (int i = 0; i < _real_local_shard_num; ++i) {
     FsChannelConfig channel_config;
     if (_config.compress_in_save() && (save_param == 0 || save_param == 3)) {
@@ -710,8 +713,6 @@ int64_t SSDSparseTable::CacheShuffle(
   }
   int shuffle_node_num = _config.sparse_table_cache_file_num();
   LOG(INFO) << "Table>> shuffle node num is: " << shuffle_node_num;
-  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
-
   std::vector<
       paddle::framework::ChannelWriter<std::pair<uint64_t, std::string>>>
       writers(_real_local_shard_num);
@@ -725,9 +726,11 @@ int64_t SSDSparseTable::CacheShuffle(
     tmp_channels.push_back(
         paddle::framework::MakeChannel<std::pair<uint64_t, std::string>>());
   }
-
+#if defined(PADDLE_WITH_MKLML)
+  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (int i = 0; i < _real_local_shard_num; ++i) {
     paddle::framework::ChannelWriter<std::pair<uint64_t, std::string>>& writer =
         writers[i];
@@ -877,9 +880,11 @@ int32_t SSDSparseTable::Load(size_t start_idx,
   end_idx = static_cast<int>(end_idx) < _sparse_table_shard_num
                 ? end_idx
                 : _sparse_table_shard_num;
+#if defined(PADDLE_WITH_MKLML)
   int thread_num = (end_idx - start_idx) < 20 ? (end_idx - start_idx) : 20;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
+#endif
   for (size_t i = start_idx; i < end_idx; ++i) {
     FsChannelConfig channel_config;
     channel_config.path = file_list[i];

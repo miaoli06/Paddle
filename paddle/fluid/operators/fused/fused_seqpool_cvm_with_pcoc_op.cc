@@ -82,7 +82,7 @@ class FusedSeqpoolCVMWithPCOCOp : public framework::OperatorWithKernel {
       } else {
         out_dim = {-1, dims[rank - 1] - max_cvm_offset};
       }
-      outs_dims[i] = framework::make_ddim(out_dim);
+      outs_dims[i] = phi::make_ddim(out_dim);
     }
     ctx->SetOutputsDim("Out", outs_dims);
   }

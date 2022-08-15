@@ -513,7 +513,9 @@ void BindEagerPyLayer(PyObject* module) {
   auto heap_type = reinterpret_cast<PyHeapTypeObject*>(
       PyType_Type.tp_alloc(&PyType_Type, 0));
   heap_type->ht_name = ToPyObject("PyLayer");
+#if PY_VERSION_HEX >= 0x03050000
   heap_type->ht_qualname = ToPyObject("PyLayer");
+#endif
   auto type = &heap_type->ht_type;
   type->tp_name = "PyLayer";
   type->tp_basicsize = sizeof(PyLayerObject);
@@ -521,8 +523,10 @@ void BindEagerPyLayer(PyObject* module) {
   type->tp_methods = pylayer_methods;
   type->tp_getset = pylayer_properties;
   type->tp_new = (newfunc)PyLayerNew;
+#if PY_VERSION_HEX >= 0x03050000
   Py_INCREF(&PyBaseObject_Type);
   type->tp_base = reinterpret_cast<PyTypeObject*>(&PyBaseObject_Type);
+#endif
   type->tp_flags |=
       Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HEAPTYPE;
 #if PY_VERSION_HEX >= 0x03050000

@@ -12,7 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#if defined PADDLE_WITH_PSCORE
+#if defined(PADDLE_WITH_PSCORE) && defined(WITH_DISTRIBUTE)
 #include <stdlib.h>
 
 #include <memory>
@@ -92,6 +92,11 @@ int main(int argc, char* argv[]) {
   switch_server_a_thread_inter.join();
   LOG(INFO) << "switch_server_a_thread_inter joined";
 
+  return 0;
+}
+#else
+#include <stdio.h>
+int main(int argc, char* argv[]) {
   return 0;
 }
 #endif

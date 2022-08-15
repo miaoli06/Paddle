@@ -14,8 +14,8 @@
 
 #include <string>
 #include "paddle/fluid/operators/fused/fused_concat_op.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 
 namespace paddle {
 namespace operators {
@@ -86,10 +86,9 @@ class FusedSeqpoolConcatCUDAKernel : public framework::OpKernel<T> {
       output_data[i] = reinterpret_cast<T *>(output->mutable_data<T>(place));
     }
 
-    auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                      platform::DeviceContextPool::Instance().Get(
-                          BOOST_GET_CONST(platform::CUDAPlace, place)))
-                      ->stream();
+    auto stream = dynamic_cast<phi::GPUContext*>(
+                 platform::DeviceContextPool::Instance().Get(place))
+                 ->stream();
 
     size_t total_ptr_len = input_data.size() + output_data.size();
     auto temp_ptr = memory::AllocShared(
@@ -168,10 +167,9 @@ class FusedSeqpoolConcatGradCUDAKernel : public framework::OpKernel<T> {
       out_grads_data[i] = reinterpret_cast<const T *>(out_grad->data<T>());
     }
 
-    auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                      platform::DeviceContextPool::Instance().Get(
-                          BOOST_GET_CONST(platform::CUDAPlace, place)))
-                      ->stream();
+    auto stream = dynamic_cast<phi::GPUContext*>(
+                 platform::DeviceContextPool::Instance().Get(place))
+                 ->stream();
     size_t total_ptr_len = out_grads_data.size() + in_grads_data.size();
     auto temp_ptr = memory::AllocShared(
         place, total_ptr_len * sizeof(void *) + sizeof(int) * idxs.size());
@@ -240,10 +238,9 @@ class FusedConcatCUDAKernel : public framework::OpKernel<T> {
     output->Resize({batch_size, total_cols});
     T *gpu_out_value = reinterpret_cast<T *>(output->mutable_data<T>(place));
 
-    auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                      platform::DeviceContextPool::Instance().Get(
-                          BOOST_GET_CONST(platform::CUDAPlace, place)))
-                      ->stream();
+    auto stream = dynamic_cast<phi::GPUContext*>(
+                 platform::DeviceContextPool::Instance().Get(place))
+                 ->stream();
 
     auto temp_ptr = memory::AllocShared(place, x_num * sizeof(void *));
     T **gpu_input_values = reinterpret_cast<T **>(temp_ptr->ptr());
@@ -293,10 +290,9 @@ class FusedConcatGradCUDAKernel : public framework::OpKernel<T> {
     }
     const T *gpu_out_grad = reinterpret_cast<const T *>(out_grad->data<T>());
 
-    auto stream = dynamic_cast<platform::CUDADeviceContext *>(
-                      platform::DeviceContextPool::Instance().Get(
-                          BOOST_GET_CONST(platform::CUDAPlace, place)))
-                      ->stream();
+    auto stream = dynamic_cast<phi::GPUContext*>(
+                 platform::DeviceContextPool::Instance().Get(place))
+                 ->stream();
     auto temp_ptr = memory::AllocShared(place, x_num * sizeof(void *));
     T **gpu_in_grads_values = reinterpret_cast<T **>(temp_ptr->ptr());
     cudaMemcpyAsync(gpu_in_grads_values, in_grads_data.data(),
