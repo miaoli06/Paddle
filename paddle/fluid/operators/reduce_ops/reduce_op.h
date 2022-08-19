@@ -75,15 +75,15 @@ inline void GetShuffledDim(const DDim& src_dims,
   }
 }
 
-static inline std::vector<int> GetReduceDim(const std::vector<int>& dims,
+static inline void GetReduceDim(const std::vector<int>& dims,
                                             int dim_size,
-                                            bool reduce_all) {
-  std::vector<int> reduce_dims;
+                                            bool reduce_all,
+                                            std::vector<int> *reduce_dims) {
   if (reduce_all) {
-    reduce_dims.resize(dim_size);
-    int reduce_size = reduce_dims.size();
+    reduce_dims->resize(dim_size);
+    int reduce_size = reduce_dims->size();
     for (int i = 0; i < reduce_size; ++i) {
-      reduce_dims[i] = i;
+      (*reduce_dims)[i] = i;
     }
   } else {
     for (auto e : dims) {
@@ -94,10 +94,9 @@ static inline std::vector<int> GetReduceDim(const std::vector<int>& dims,
                             "axis[i] should less than x_dims, but got %d.",
                             dim_size,
                             e));
-      reduce_dims.push_back(e >= 0 ? e : e + dim_size);
+      reduce_dims->push_back(e >= 0 ? e : e + dim_size);
     }
   }
-  return reduce_dims;
 }
 template <typename DeviceContext, typename OutT>
 void GetShuffledInput(const framework::ExecutionContext& context,
@@ -790,7 +789,8 @@ class ReduceCudaGradKernel : public framework::OpKernel<T> {
         static_cast<framework::proto::VarType::Type>(out_dtype));
     // get reduce_dim and reduce_num for reduce_mean_grad
     int dim_size = in_x->dims().size();
-    std::vector<int> reduce_dims = GetReduceDim(dims, dim_size, reduce_all);
+    std::vector<int> reduce_dims;
+    GetReduceDim(dims, dim_size, reduce_all, &reduce_dims);
     auto update_dims = vectorize(d_x->dims());
     int reduce_num = 1;
     for (auto i : reduce_dims) {

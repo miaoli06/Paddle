@@ -556,7 +556,7 @@ if(WITH_PYTHON)
     list(APPEND PYBIND_DEPS custom_operator)
     list(APPEND PYBIND_DEPS custom_operator_node)
   endif()
-
+  
   cc_library(
     paddle_pybind SHARED
     SRCS ${PYBIND_SRCS}

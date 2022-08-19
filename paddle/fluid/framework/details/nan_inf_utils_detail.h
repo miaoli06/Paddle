@@ -63,7 +63,7 @@ void tensor_check(const std::string& op_type,
                   const std::string& var_name,
                   const framework::Tensor& tensor,
                   const platform::Place& place);
-
+void CudaTensorCheckNanInf(const framework::Tensor& tensor, unsigned int* dnum);
 }  // namespace details
 }  // namespace framework
 }  // namespace paddle

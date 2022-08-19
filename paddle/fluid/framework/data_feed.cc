@@ -3102,6 +3102,14 @@ void SlotPaddleBoxDataFeed::Init(const DataFeedDesc& data_feed_desc) {
     parser_so_path_.clear();
   }
 }
+inline bool is_slot_values(const std::string &slot) {
+  for (auto &c : slot) {
+    if (c < '0' || c > '9') {
+        return false;
+    }
+  }
+  return true;
+}
 void SlotPaddleBoxDataFeed::GetUsedSlotIndex(
     std::vector<int>* used_slot_index) {
   auto boxps_ptr = BoxWrapper::GetInstance();
@@ -3112,6 +3120,9 @@ void SlotPaddleBoxDataFeed::GetUsedSlotIndex(
   for (int i = 0; i < use_slot_size_; ++i) {
     auto& info = used_slots_info_[i];
     if (info.type[0] != 'u') {
+      continue;
+    }
+    if (!is_slot_values(info.slot)) {
       continue;
     }
     if (slot_name_omited_in_feedpass_.find(info.slot) ==

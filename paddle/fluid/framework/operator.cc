@@ -1743,7 +1743,39 @@ void OperatorWithKernel::RunImpl(const Scope& scope,
   }
 
   if (FLAGS_check_nan_inf) {
-    framework::details::CheckOpHasNanOrInf(*this, exec_scope, place);
+//    framework::details::CheckOpHasNanOrInf(*this, exec_scope, place);
+    if (framework::details::CheckOpHasNanOrInfRet(*this, exec_scope, place)) {
+      framework::details::DumpAllScope(exec_scope, place);
+      // dump current op data
+      for (auto& iname : InputVars()) {
+        auto* var = exec_scope.FindVar(iname);
+        if (var == nullptr) continue;
+        std::ostringstream os;
+        os << "input name:" << iname << ", ";
+        if (var->IsType<framework::LoDTensor>()) {
+          os << var->Get<framework::LoDTensor>();
+        } else if (var->IsType<phi::SelectedRows>()) {
+          os << var->Get<phi::SelectedRows>().value();
+        }
+        os << "\n";
+        printf("%s", os.str().c_str());
+      }
+      for (auto& iname : OutputVars(true)) {
+        auto* var = exec_scope.FindVar(iname);
+        if (var == nullptr) continue;
+        std::ostringstream os;
+        os << "output name:" << iname << ", ";
+        if (var->IsType<framework::LoDTensor>()) {
+          os << var->Get<framework::LoDTensor>();
+        } else if (var->IsType<phi::SelectedRows>()) {
+          os << var->Get<phi::SelectedRows>().value();
+        }
+        os << "\n";
+        printf("%s", os.str().c_str());
+      }
+      PADDLE_ENFORCE(false, "ERROR: check INF and NAN: %s",
+                     DebugStringEx(&exec_scope).c_str());
+    }
   }
 
   // To solve issue #15032, have a discussion with @Luotao for cpu inference,

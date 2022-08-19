@@ -172,5 +172,63 @@ std::future<void> AsyncIO(Callback callback) {
   return ThreadPoolIO::GetInstanceIO()->Run(callback);
 }
 
+inline paddle::framework::ThreadPool* get_thread_pool(int thread_num) {
+  thread_local std::shared_ptr<paddle::framework::ThreadPool> thread_pool =
+      nullptr;
+  if (thread_pool == nullptr) {
+    thread_pool.reset(new paddle::framework::ThreadPool(thread_num));
+  }
+  return thread_pool.get();
+}
+inline void split_region(size_t all_num, size_t region_num, size_t region_index,
+                         size_t* start_index, size_t* end_index) {
+  size_t divisor = all_num / region_num;
+  size_t remainder = all_num % region_num;
+  if (region_index < remainder) {
+    *start_index = (divisor + 1) * region_index;
+    *end_index = *start_index + (divisor + 1);
+  } else {
+    *start_index = divisor * region_index + remainder;
+    *end_index = *start_index + divisor;
+  }
+  if (*end_index > all_num) {
+    *end_index = all_num;
+  }
+}
+template <class THREAD_FUNC>
+inline void parallel_run_range(size_t n, THREAD_FUNC&& func, int thread_num = 32) {
+  paddle::framework::ThreadPool* thrgrp = get_thread_pool(thread_num);
+  std::vector<std::future<void>> wait_futures;
+  for (int tid = 0; tid < thread_num; ++tid) {
+    wait_futures.emplace_back(thrgrp->Run([n, tid, thread_num, &func](void) {
+      size_t start = 0;
+      size_t end = 0;
+      split_region(n, thread_num, tid, &start, &end);
+      func(tid, start, end);
+    }));
+  }
+  for (int i = 0; i < thread_num; ++i) {
+    wait_futures[i].get();
+  }
+}
+template <class THREAD_FUNC>
+inline void parallel_run_dynamic(size_t n, THREAD_FUNC&& func, int thread_num = 32) {
+  paddle::framework::ThreadPool* thrgrp = get_thread_pool(thread_num);
+  std::vector<std::future<void>> wait_futures;
+  std::atomic<size_t> counter(0);
+  for (int tid = 0; tid < thread_num; ++tid) {
+    wait_futures.emplace_back(thrgrp->Run([n, &counter, &func](void) {
+      size_t i = counter++;
+      while (i < n) {
+        func(i);
+        i = counter++;
+      }
+    }));
+  }
+  for (int i = 0; i < thread_num; ++i) {
+    wait_futures[i].get();
+  }
+}
+
 }  // namespace framework
 }  // namespace paddle

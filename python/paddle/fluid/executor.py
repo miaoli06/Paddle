@@ -1797,24 +1797,26 @@ class Executor(object):
                           fetch_handler=None):
         if program._pipeline_opt is not None:
             import paddle
-            if dataset is not None:
-                raise RuntimeError("dataset should be None for pipeline mode")
-            # The following fake dataset is created to call
-            # the _prepare_trainer api, and it is meaningless.
-            data_vars = []
-            for var in program.global_block().vars.values():
-                if var.is_data:
-                    data_vars.append(var)
-            if core.is_compiled_with_npu():
-                dataset = paddle.fluid.DatasetFactory().create_dataset(
-                    'InMemoryDataset')
+            if dataset is None:
+                # The following fake dataset is created to call
+                # the _prepare_trainer api, and it is meaningless.
+                data_vars = []
+                for var in program.global_block().vars.values():
+                    if var.is_data:
+                        data_vars.append(var)
+                if core.is_compiled_with_npu():
+                    dataset = paddle.fluid.DatasetFactory().create_dataset(
+                        'InMemoryDataset')
+                else:
+                    dataset = paddle.fluid.DatasetFactory().create_dataset(
+                        'FileInstantDataset')
+                dataset.set_batch_size(1)
+                dataset.set_thread(1)
+                dataset.set_filelist(['None'])
+                dataset.set_use_var(data_vars)
             else:
-                dataset = paddle.fluid.DatasetFactory().create_dataset(
-                    'FileInstantDataset')
-            dataset.set_batch_size(1)
-            dataset.set_thread(1)
-            dataset.set_filelist(['None'])
-            dataset.set_use_var(data_vars)
+                if dataset is None:
+                    raise RuntimeError("dataset is need and should be initialized")
         elif program._heter_pipeline_opt is not None:
             stage_id = program._heter_pipeline_opt["pipeline_stage"]
             #print("test_fl_stage_id: {}".format(stage_id))
@@ -1852,7 +1854,7 @@ class Executor(object):
 
         dataset._prepare_to_run()
         real_fetch_list = []
-        if program._pipeline_opt:
+        if program._pipeline_opt and dataset is None:
             real_program = program._pipeline_opt["section_program"]
             for fetch_var in fetch_list:
                 if isinstance(fetch_var, Variable):
@@ -1863,12 +1865,13 @@ class Executor(object):
                     real_fetch_list.append(fetch_var)
 
             program._pipeline_opt["section_program"] = self._add_feed_fetch_ops(
-                program=program._pipeline_opt["section_program"],
+                program=real_program,
                 feed=[],
                 fetch_list=real_fetch_list,
                 feed_var_name='feed',
                 fetch_var_name='fetch')
-            main_block = program._pipeline_opt["section_program"].block(0)
+            
+            main_block = real_program.block(0)
             for op in main_block.ops:
                 # set the op_role of fetch op to Optimize to avoid
                 # erase the fetched vars by gc for pipeline
@@ -1877,6 +1880,7 @@ class Executor(object):
                         'op_role',
                         core.op_proto_and_checker_maker.OpRole.Optimize)
             fetch_list = None
+            
         scope, trainer = self._prepare_trainer(program=program,
                                                dataset=dataset,
                                                scope=scope,
@@ -1893,7 +1897,7 @@ class Executor(object):
             if program._heter_pipeline_opt is None:
                 self._dump_debug_info(program=program, trainer=trainer)
         # warning if dataset not set psgpu in psgpu mode
-        if dataset.use_ps_gpu is False and trainer.proto_desc.use_ps_gpu:
+        if not getattr(dataset, "use_ps_gpu", False) and trainer.proto_desc.use_ps_gpu:
             logging.warning("dataset should call set_use_ps_gpu in PsGpu mode")
 
         dataset._dynamic_adjust_before_train(trainer.proto_desc.thread_num)

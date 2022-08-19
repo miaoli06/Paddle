@@ -24,23 +24,21 @@
 #include "paddle/phi/kernels/scale_kernel.h"
 
 namespace phi {
-
-std::pair<std::vector<int64_t>, std::vector<int64_t>> GetReduceDims(
-    const DDim& src_dim, const DDim& dst_dim) {
-  std::vector<int64_t> reduce_dims, new_dims;
+typedef std::pair<std::vector<int64_t>, std::vector<int64_t>> DIMVector;
+void GetReduceDims(
+    const DDim& src_dim, const DDim& dst_dim, DIMVector *dim_out) {
   auto pre_dims = src_dim.size() - dst_dim.size();
   for (auto i = 0; i < pre_dims; ++i) {
-    reduce_dims.push_back(i);
+    dim_out->first.push_back(i);
   }
 
   for (auto i = pre_dims; i < src_dim.size(); ++i) {
     if (dst_dim[i - pre_dims] == 1 && src_dim[i] != 1) {
-      reduce_dims.push_back(i);
+      dim_out->first.push_back(i);
     } else {
-      new_dims.push_back(dst_dim[i - pre_dims]);
+      dim_out->second.push_back(dst_dim[i - pre_dims]);
     }
   }
-  return {reduce_dims, new_dims};
 }
 
 template <typename T, typename Context>
@@ -62,7 +60,8 @@ void DistGradKernel(const Context& dev_ctx,
   ScaleKernel<T, Context>(dev_ctx, x_grad_tmp, -1.0, 0.0, false, &y_grad_tmp);
   // do reduce, the implemetation of cpu SumKernel has bug, it changes
   // the dims of output iternally, so we Resize x/y_grad twice.
-  auto res_x = GetReduceDims(x_grad_tmp.dims(), x.dims());
+  DIMVector res_x;
+  GetReduceDims(x_grad_tmp.dims(), x.dims(), &res_x);
   if (!std::get<0>(res_x).empty()) {
     x_grad->Resize(phi::make_ddim(std::get<1>(res_x)));
     SumKernel<T, Context>(
@@ -71,7 +70,8 @@ void DistGradKernel(const Context& dev_ctx,
   } else {
     x_grad->ShareBufferWith(x_grad_tmp);
   }
-  auto res_y = GetReduceDims(y_grad_tmp.dims(), y.dims());
+  DIMVector res_y;
+  GetReduceDims(y_grad_tmp.dims(), y.dims(), &res_y);
   if (!std::get<0>(res_y).empty()) {
     y_grad->Resize(phi::make_ddim(std::get<1>(res_y)));
     SumKernel<T, Context>(

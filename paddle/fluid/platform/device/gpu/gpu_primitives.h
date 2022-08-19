@@ -37,7 +37,7 @@ namespace platform {
 // Default thread count per block(or block size).
 // TODO(typhoonzero): need to benchmark against setting this value
 //                    to 1024.
-constexpr int PADDLE_CUDA_NUM_THREADS = 1024;
+constexpr int PADDLE_CUDA_NUM_THREADS = 512;
 #define GET_BLOCK(N) ((N + PADDLE_CUDA_NUM_THREADS - 1) / PADDLE_CUDA_NUM_THREADS)
 #define CUDA_KERNEL_LOOP(i, n)                                  \
   for (auto i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \

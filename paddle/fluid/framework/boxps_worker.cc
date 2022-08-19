@@ -297,6 +297,7 @@ void BoxPSAsynDenseTable::InitThreadGroup() {
 
 static const int DenseKStepNode = 1;
 static const int DenseKStepALL = 2;
+static const int DenseDataNormal = 3;
 void BoxPSWorker::Initialize(const TrainerDesc& desc) {
   dev_ctx_ = platform::DeviceContextPool::Instance().Get(place_);
   node_size_ = boxps::MPICluster::Ins().size();
@@ -313,23 +314,32 @@ int BoxPSWorker::CheckNeedParam(VarDesc* var) {
   }
 
   std::string name = var->Name();
-  size_t len = name.length();
-  const char* ext = name.c_str() + len - 4;
-  // .w_0  .b_0
-  if (strncmp(ext, ".w_0", 4) == 0 || strncmp(ext, ".b_0", 4) == 0) {
-    return 1;
-  }
-  if (FLAGS_enable_sync_dense_moment) {
-    if (len < 14) {
-      return 0;
+  if (sync_mode_ == DenseDataNormal) {
+    // data normal param
+    if (name.find(".batch_size") != std::string::npos ||
+           name.find(".batch_sum") != std::string::npos ||
+           name.find(".batch_square_sum") != std::string::npos) {
+      return 3;
     }
-    ext = name.c_str() + len - 14;
-    // .w_0_moment1_0  .b_0_moment2_0
-    if (strncmp(ext, ".w_0_moment1_0", 14) == 0 ||
-        strncmp(ext, ".w_0_moment2_0", 14) == 0 ||
-        strncmp(ext, ".b_0_moment1_0", 14) == 0 ||
-        strncmp(ext, ".b_0_moment2_0", 14) == 0) {
-      return 2;
+  } else {
+    size_t len = name.length();
+    const char* ext = name.c_str() + len - 4;
+    // .w_0  .b_0
+    if (strncmp(ext, ".w_0", 4) == 0 || strncmp(ext, ".b_0", 4) == 0) {
+      return 1;
+    }
+    if (FLAGS_enable_sync_dense_moment) {
+      if (len < 14) {
+        return 0;
+      }
+      ext = name.c_str() + len - 14;
+      // .w_0_moment1_0  .b_0_moment2_0
+      if (strncmp(ext, ".w_0_moment1_0", 14) == 0 ||
+          strncmp(ext, ".w_0_moment2_0", 14) == 0 ||
+          strncmp(ext, ".b_0_moment1_0", 14) == 0 ||
+          strncmp(ext, ".b_0_moment2_0", 14) == 0) {
+        return 2;
+      }
     }
   }
   return 0;
@@ -351,18 +361,17 @@ int64_t BoxPSWorker::AllocParamTensor(int64_t* pad_len) {
     }
     const LoDTensor& root_tensor = root_scope_->FindVar(name)->Get<LoDTensor>();
     int64_t numel = root_tensor.numel();
-    if (flag == 1) {
-      total_param_len += numel;
-      //        grad_params->insert(std::make_pair(name + "@GRAD", numel));
-    } else {
+    if (flag == 2) { // moment
       total_moment_len += numel;
+    } else {
+      total_param_len += numel;
     }
-    //    VLOG(0) << "param name:" << name;
+    VLOG(1) << "param name:" << name << ", length:" << numel;
   }
 
   *pad_len = 0;
   int64_t all_sync_param_len = total_param_len + total_moment_len;
-  if (sync_mode_ == DenseKStepNode || (node_size_ > 1 && !one_ring_)) {
+  if ((node_size_ > 1 && !one_ring_)) {
     if ((all_sync_param_len % device_num_) != 0) {
       *pad_len = (device_num_ - (all_sync_param_len % device_num_));
       all_sync_param_len += *pad_len;
@@ -479,7 +488,7 @@ void BoxPSWorker::CreateDeviceResource(const ProgramDesc& main_prog) {
   }
 }
 void BoxPSWorker::SyncParam(void) {
-  if (sync_mode_ == DenseKStepNode && node_size_ == 1) {
+  if (param_sync_.numel() == 0 || sync_mode_ == DenseKStepNode && node_size_ == 1) {
     return;
   }
 
@@ -493,10 +502,7 @@ void BoxPSWorker::SyncParam(void) {
 
   int64_t numel = param_sync_.numel();
   float* sendbuff = param_sync_.data<float>();
-
-  if (sync_mode_ == DenseKStepNode ||
-      (node_size_ > 1 && sync_mode_ == DenseKStepALL &&
-       !one_ring_)) {  // KStep Node
+  if ((node_size_ > 1 && !one_ring_)) {  // KStep Node
     int part_param_len = numel / device_num_;
     float* recv_ptr = &sendbuff[device_id_ * part_param_len];
 
@@ -509,11 +515,10 @@ void BoxPSWorker::SyncParam(void) {
     PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupEnd());
     PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllGather(
         recv_ptr, sendbuff, part_param_len, ncclFloat32, comm->comm(), stream));
-  } else if (sync_mode_ == DenseKStepALL) {  // KStep ALL
+  } else {  // KStep ALL
     PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
         sendbuff, sendbuff, numel, ncclFloat32, ncclSum, comm->comm(), stream));
-  } else {
-  }
+  } 
   const float scale = 1.0 / (device_num_ * node_size_);
   TensorScaleValue(place_, param_sync_, &param_sync_, scale);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
@@ -566,19 +571,19 @@ void BoxPSWorker::TrainFiles() {
 
     if (dense_table_) {
       dense_table_->PushDense(place_, &grad_async_);
-    } else if (sync_mode_ == DenseKStepNode || sync_mode_ == DenseKStepALL) {
+    } else if (sync_mode_ > 0) {
       if (step > param_sync_step_) {
         step = 0;
         SyncParam();
       }
     }
-//    if (FLAGS_check_nan_inf) {
-//      // check nan result
-//      if (framework::details::CheckBatchNanOrInfRet(place_)) {
-//        framework::details::DumpAllScope(*thread_scope_, place_);
-//        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
-//      }
-//    }
+    if (FLAGS_check_nan_inf) {
+      // check nan result
+      if (framework::details::CheckBatchNanOrInfRet(place_)) {
+        framework::details::DumpAllScope(*thread_scope_, place_);
+        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
+      }
+    }
     AddAucMonitor(thread_scope_, place_);
 
     accum_num += batch_size;
@@ -586,7 +591,7 @@ void BoxPSWorker::TrainFiles() {
     ++step;
   }
   // sync param step
-  if (sync_mode_ == DenseKStepNode || sync_mode_ == DenseKStepALL) {
+  if (sync_mode_ > 0) {
     SyncParam();
   }
   dev_ctx_->Wait();
@@ -596,64 +601,6 @@ void BoxPSWorker::TrainFiles() {
   auto box_ptr = BoxWrapper::GetInstance();
   box_ptr->PrintSyncTimer(device_id_, timer.ElapsedSec());
 }
-/**
-static
-void print_hbm_mem(const int gpu_id, const char *name = "") {
-    size_t hbm_free = 0;
-    size_t hbm_total = 0;
-    platform::GpuMemoryUsage(&hbm_free, &hbm_total);
-
-    VLOG(0) << "hbm usage:("
-            << name << "), device_id: "
-            << gpu_id << " total_size: "
-            << (hbm_total >> 20) << "MB, "
-            << "free: " << (hbm_free >> 20) << " MB, "
-            << "used: " << ((hbm_total - hbm_free) >> 20) << "MB";
-}
-
-class GPUOpMemStat {
-public:
-    GPUOpMemStat(int device_id) :
-        device_id_(device_id),
-        start_mem_used_(0),
-        end_mem_used_(0) {
-
-    }
-
-    void start(void) {
-        start_mem_used_ = get_used_mem();
-    }
-
-    void stop(void) {
-        end_mem_used_ = get_used_mem();
-    }
-
-    void print(const std::string &name) {
-        size_t used_mem = ((end_mem_used_ - start_mem_used_) >> 20);
-        if (used_mem == 0) {
-            return;
-        }
-        VLOG(0) << "hbm usage:(" << name << "), "
-                << "device_id: " << device_id_
-                << " before: " << (start_mem_used_ >> 20) << "MB, "
-                << "after: " << (end_mem_used_ >> 20) << " MB, "
-                << "used: " << used_mem << "MB";
-    }
-
-private:
-    size_t get_used_mem(void) {
-        size_t hbm_free = 0;
-        size_t hbm_total = 0;
-        platform::GpuMemoryUsage(&hbm_free, &hbm_total);
-        return (hbm_total - hbm_free);
-    }
-
-private:
-    int device_id_;
-    size_t start_mem_used_;
-    size_t end_mem_used_;
-};
-*/
 void BoxPSWorker::TrainFilesWithProfiler() {
   VLOG(3) << "begin section_worker TrainFiles with profiler";
 
@@ -667,6 +614,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
   platform::Timer sync_timer;
   platform::Timer main_timer;
   platform::Timer outer_timer;
+  platform::Timer dump_timer;
 
   std::vector<double> op_total_time;
   std::vector<std::string> op_name;
@@ -680,9 +628,6 @@ void BoxPSWorker::TrainFilesWithProfiler() {
   platform::Timer timeline;
   device_reader_->Start();
 
-  //  print_hbm_mem(device_id_, "BoxPSWorker");
-  //
-  //  GPUOpMemStat op_mem(device_id_);
   platform::SetDeviceId(device_id_);
   outer_timer.Start();
   while (true) {
@@ -702,33 +647,34 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     int op_id = 0;
     dev_ctx_->Wait();
     for (auto& op : ops_) {
-      //      op_mem.start();
       timeline.Start();
       op->Run(*thread_scope_, place_);
       dev_ctx_->Wait();
       timeline.Pause();
       op_total_time[op_id++] += timeline.ElapsedUS();
-      //      op_mem.stop();
-      //      op_mem.print(op->Type());
     }
     dev_ctx_->Wait();
     cal_timer.Pause();
 
-//    if (FLAGS_check_nan_inf) {
-//      // check nan result
-//      if (framework::details::CheckBatchNanOrInfRet(place_)) {
-//        framework::details::DumpAllScope(*thread_scope_, place_);
-//        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
-//      }
-//    }
+    if (FLAGS_check_nan_inf) {
+      // check nan result
+      if (framework::details::CheckBatchNanOrInfRet(place_)) {
+        framework::details::DumpAllScope(*thread_scope_, place_);
+        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
+      }
+    }
 
     AddAucMonitor(thread_scope_, place_);
 
     if (need_dump_field_) {
-      DumpField(*thread_scope_, dump_mode_, dump_interval_);
+      dump_timer.Resume();
+      DumpFieldBoxPS(*thread_scope_, dump_mode_, dump_interval_);
+      dump_timer.Pause();
     }
     if (need_dump_param_ && device_id_ == 0) {
-      DumpParam(*thread_scope_, step_cnt);
+      dump_timer.Resume();
+      DumpParamBoxPS(*thread_scope_, step_cnt);
+      dump_timer.Pause();
     }
     thread_scope_->DropKids();
     ++step_cnt;
@@ -736,7 +682,9 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     main_timer.Pause();
   }
   if (need_dump_field_ || need_dump_param_) {
+    dump_timer.Resume();
     writer_.Flush();
+    dump_timer.Pause();
   }
 
   thread_scope_->DropKids();
@@ -751,7 +699,8 @@ void BoxPSWorker::TrainFilesWithProfiler() {
              << " cal_time:" << cal_timer.ElapsedUS()
              << " sync_time:" << sync_timer.ElapsedUS()
              << " main_time:" << main_timer.ElapsedUS()
-             << " outer_time:" << outer_timer.ElapsedUS();
+             << " outer_time:" << outer_timer.ElapsedUS()
+             << " dump_timer:" << dump_timer.ElapsedUS();
   for (size_t i = 0; i < ops_.size(); ++i) {
     LOG(ERROR) << "card:" << device_id_ << ", op: " << op_name[i]
                << ", mean time: " << op_total_time[i] / accum_num

@@ -181,10 +181,25 @@ def __bootstrap__():
 
     flag_prefix = "FLAGS_"
     read_env_flags = [
-        key[len(flag_prefix):] for key in core.globals().keys()
-        if key.startswith(flag_prefix)
     ]
-
+    # add paddle default gflags
+    for key in core.globals().keys():
+        if not key.startswith(flag_prefix):
+            continue
+        name = key[len(flag_prefix):] 
+        if name in read_env_flags:
+            continue
+        read_env_flags.append(name)
+    # add environ gflags
+    # for key in os.environ:
+    #     if not key.startswith(flag_prefix):
+    #         continue
+    #     name = key[len(flag_prefix):]
+    #     if name in read_env_flags:
+    #         continue
+    #     read_env_flags.append(name)
+    print("gflags: {}".format(read_env_flags))
+    
     def remove_flag_if_exists(name):
         if name in read_env_flags:
             read_env_flags.remove(name)

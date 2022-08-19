@@ -31,6 +31,6 @@ void AppendLoD(LoD* lod, const LoD& lod_length);
  * If offset_lod = [[0, 2, 3],[0, 3, 5, 9]]
  * then length_lod = [[2, 1], [3, 2, 4]]
  */
-LoD ConvertToLengthBasedLoD(const LoD& offset_lod);
+void ConvertToLengthBasedLoD(const LoD& offset_lod, LoD *out_lod);
 
 }  // namespace  phi

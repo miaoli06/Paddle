@@ -49,7 +49,9 @@ AutoGrowthBestFitAllocator::AutoGrowthBestFitAllocator(
     : underlying_allocator_(underlying_allocator),
       alignment_(alignment),
       chunk_size_(std::max(AlignedSize(chunk_size, alignment), alignment)),
-      allow_free_idle_chunk_(allow_free_idle_chunk) {}
+      allow_free_idle_chunk_(allow_free_idle_chunk) {
+  VLOG(0) << "AutoGrowthBestFitAllocator init";
+}
 
 phi::Allocation *AutoGrowthBestFitAllocator::AllocateImpl(
     size_t unaligned_size) {

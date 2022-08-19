@@ -102,8 +102,8 @@ void PNormKernel(const Context& dev_ctx,
   T* norm = dev_ctx.template Alloc<T>(out);
   auto xdim = in_x->dims();
   std::vector<int64_t> axis_dims = {static_cast<int64_t>(axis)};
-  std::vector<int> reduce_axis =
-      funcs::details::GetReduceDim(axis_dims, xdim.size(), asvector);
+  std::vector<int> reduce_axis;
+  funcs::details::GetReduceDim(axis_dims, xdim.size(), asvector, &reduce_axis);
 
   using MT = typename dtype::MPTypeTrait<T>::Type;
   if (porder == 0) {

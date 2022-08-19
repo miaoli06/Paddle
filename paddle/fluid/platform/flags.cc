@@ -963,6 +963,23 @@ PADDLE_DEFINE_EXPORTED_int32(padbox_slotpool_thread_num, 1,
 PADDLE_DEFINE_EXPORTED_bool(use_gpu_replica_cache, false,
             "if true ,will open use_gpu_replica_cache");
 PADDLE_DEFINE_EXPORTED_int32(gpu_replica_cache_dim, 8, "use_gpu_replica_cache,the dim");
+PADDLE_DEFINE_EXPORTED_int32(padbox_dataset_shuffle_thread_num, 20,
+             "PadBoxSlotDataset shuffle thread num");
+PADDLE_DEFINE_EXPORTED_int32(padbox_dataset_merge_thread_num, 20,
+             "PadBoxSlotDataset shuffle thread num");
+PADDLE_DEFINE_EXPORTED_bool(padbox_dataset_disable_shuffle, false,
+            "if true ,will disable data shuffle");
+PADDLE_DEFINE_EXPORTED_bool(padbox_auc_runner_mode, false, "auc runner mode");
+PADDLE_DEFINE_EXPORTED_bool(padbox_dataset_disable_polling, false,
+            "if true ,will disable input file list polling");
+PADDLE_DEFINE_EXPORTED_bool(padbox_dataset_enable_unrollinstance, false,
+            "if true ,will enable unrollinstance");
+PADDLE_DEFINE_EXPORTED_bool(lineid_have_extend_info, false,
+            "if true , will split line id by space into 2 part, the second "
+            "part will dump at the last of line");
+PADDLE_DEFINE_EXPORTED_bool(dump_filed_same_as_aibox, false,
+            "if true , will change dump format from abc.tmp0:2:1:1 into "
+            "abc:1:1, which same as aibox");
 
 PADDLE_DEFINE_EXPORTED_bool(
     gpugraph_enable_hbm_table_collision_stat,

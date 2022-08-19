@@ -65,7 +65,7 @@ inline ncclDataType_t ToNCCLDataType(framework::proto::VarType::Type type) {
 #endif
   } else {
     PADDLE_THROW(platform::errors::Unimplemented(
-        "This datatype in nccl is not supported."));
+        "This datatype=%d in nccl is not supported.", type));
   }
 }
 

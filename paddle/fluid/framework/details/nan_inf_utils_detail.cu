@@ -237,6 +237,53 @@ void tensor_check<phi::GPUContext>(const std::string& op_type,
   VisitDataType(framework::TransToProtoVarType(tensor.dtype()), vistor);
 }
 
+template <typename T>
+__global__ void CountNanInfNumKernel(const size_t len, const T* val,
+                                     unsigned int* nan_inf_num) {
+  /* Per block accumulator */
+  __shared__ unsigned int block_nan_inf;
+  if (threadIdx.x == 0) {
+    block_nan_inf = 0;
+  }
+  __syncthreads();
+
+  const size_t tid = threadIdx.x + blockIdx.x * blockDim.x;
+  T sum = static_cast<T>(0.0);
+  for (size_t i = tid; i < len; i += blockDim.x * gridDim.x) {
+    sum += (val[i] - val[i]);
+  }
+  if (isnan(sum) || isinf(sum)) {
+    block_nan_inf = 1;
+  }
+  __syncthreads();
+
+  if (block_nan_inf == 0) {
+    return;
+  }
+  if (threadIdx.x == 0) {
+    atomicAdd(nan_inf_num, block_nan_inf);
+  }
+}
+
+void CudaTensorCheckNanInf(const framework::Tensor& tensor,
+                           unsigned int* dnum_ptr) {
+  auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
+      platform::DeviceContextPool::Instance().Get(tensor.place()));
+
+  size_t len = static_cast<size_t>(tensor.numel());
+  const size_t threads = 1024;
+  size_t blocks = std::min(static_cast<size_t>(128),
+                           static_cast<size_t>((len + threads - 1) / threads));
+  auto dtype = framework::TransToProtoVarType(tensor.type());
+  if (dtype == proto::VarType::FP32) {
+    CountNanInfNumKernel<<<blocks, threads, 0, dev_ctx->stream()>>>(
+        len, tensor.data<float>(), dnum_ptr);
+  } else if (dtype == proto::VarType::FP64) {
+    CountNanInfNumKernel<<<blocks, threads, 0, dev_ctx->stream()>>>(
+        len, tensor.data<double>(), dnum_ptr);
+  }
+}
+
 }  // namespace details
 }  // namespace framework
 }  // namespace paddle

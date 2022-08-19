@@ -40,20 +40,18 @@ void AppendLoD(LoD *lod, const LoD &lod_length) {
   }
 }
 
-LoD ConvertToLengthBasedLoD(const LoD &offset_lod) {
-  LoD length_lod;
-  length_lod.reserve(offset_lod.size());
+void ConvertToLengthBasedLoD(const LoD &offset_lod, LoD *length_lod) {
+  length_lod->resize(offset_lod.size());
   for (size_t lvl = 0; lvl < offset_lod.size(); ++lvl) {
-    std::vector<size_t> level;
+    auto &level = (*length_lod)[lvl];
+    level.clear();
     if (offset_lod[lvl].size() > 0) {
       level.reserve(offset_lod[lvl].size() - 1);
     }
     for (size_t idx = 0; idx < offset_lod[lvl].size() - 1; ++idx) {
       level.push_back(offset_lod[lvl][idx + 1] - offset_lod[lvl][idx]);
     }
-    length_lod.push_back(level);
   }
-  return length_lod;
 }
 
 }  // namespace phi

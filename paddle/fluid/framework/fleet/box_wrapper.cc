@@ -961,7 +961,9 @@ bool BoxWrapper::LoadSSD2Mem(const std::string& date) {
   return boxps_ptr_->LoadSSD2Mem(day_id);
 }
 //===================== box filemgr ===============================
-BoxFileMgr::BoxFileMgr() {}
+BoxFileMgr::BoxFileMgr() {
+  LOG(WARNING) << "BoxFileMgr construct";
+}
 BoxFileMgr::~BoxFileMgr() { destory(); }
 bool BoxFileMgr::init(const std::string& fs_name, const std::string& fs_ugi,
                       const std::string& conf_path) {

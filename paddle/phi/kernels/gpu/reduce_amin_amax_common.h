@@ -38,7 +38,8 @@ void ReduceCudaAMaxAMinGrad(const Context& dev_ctx,
   auto* d_x = x_grad;
   // get reduce_dim and reduce_num for reduce_mean_grad
   int dim_size = in_x->dims().size();
-  auto reduce_dims = funcs::details::GetReduceDim(dims, dim_size, reduce_all);
+  std::vector<int> reduce_dims;
+  funcs::details::GetReduceDim(dims, dim_size, reduce_all, &reduce_dims);
   auto update_dims = vectorize(d_x->dims());
   int reduce_num = 1;
   for (auto i : reduce_dims) {

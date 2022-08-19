@@ -661,7 +661,8 @@ void BindTensor(pybind11::module &m) {  // NOLINT
           "recursive_sequence_lengths",
           [](framework::Tensor &self) -> std::vector<std::vector<size_t>> {
             // output the length-based lod info
-            LoD lod = phi::ConvertToLengthBasedLoD(self.lod());
+            LoD lod;
+            phi::ConvertToLengthBasedLoD(self.lod(), &lod);
             std::vector<std::vector<size_t>> new_lod;
             new_lod.reserve(lod.size());
             std::copy(lod.begin(), lod.end(), std::back_inserter(new_lod));

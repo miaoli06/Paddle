@@ -142,15 +142,15 @@ static inline phi::Array<T, ElementCount> VectorToArray(
   return ret;
 }
 
-static inline std::vector<int> GetReduceDim(const std::vector<int64_t>& dims,
+static inline void GetReduceDim(const std::vector<int64_t>& dims,
                                             int dim_size,
-                                            bool reduce_all) {
-  std::vector<int> reduce_dims;
+                                            bool reduce_all,
+                                            std::vector<int> *reduce_dims) {
   if (reduce_all) {
-    reduce_dims.resize(dim_size);
-    int reduce_size = reduce_dims.size();
+    reduce_dims->resize(dim_size);
+    int reduce_size = reduce_dims->size();
     for (int i = 0; i < reduce_size; ++i) {
-      reduce_dims[i] = i;
+      (*reduce_dims)[i] = i;
     }
   } else {
     for (auto e : dims) {
@@ -161,10 +161,9 @@ static inline std::vector<int> GetReduceDim(const std::vector<int64_t>& dims,
                             "axis[i] should less than x_dims, but got %d.",
                             dim_size,
                             e));
-      reduce_dims.push_back(e >= 0 ? e : e + dim_size);
+      reduce_dims->push_back(e >= 0 ? e : e + dim_size);
     }
   }
-  return reduce_dims;
 }
 
 }  // namespace details

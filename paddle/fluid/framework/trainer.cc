@@ -72,7 +72,7 @@ void TrainerBase::DumpWork(int tid) {
       VLOG(3) << "dump text failed";
       continue;
     }
-    }
+  }
 #endif
 }
 

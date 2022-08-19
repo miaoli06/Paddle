@@ -140,8 +140,8 @@ class CMixAllGatherOpCUDAKernel : public framework::OpKernel<T> {
     box_ptr->DenseNcclTimer(device_id, false, 0x03);
 
     int64_t numel = 0;
-    auto dtype =
-        static_cast<framework::proto::VarType::Type>(in_tensors[0]->type());
+    ncclDataType_t nccl_dtype =
+            platform::ToNCCLDataType(framework::TransToProtoVarType(in_tensors[0]->dtype()));
     GetTensorMemSize(in_tensors, &numel);
 
     int64_t offset = 0;
@@ -213,7 +213,6 @@ class CMixAllGatherOpCUDAKernel : public framework::OpKernel<T> {
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     box_ptr->DenseNcclTimer(device_id, true, 0x02);
 
-    ncclDataType_t nccl_dtype = platform::ToNCCLDataType(dtype);
     if (nranks > 1 && comm_rank_num == device_num) {
       if (multi_nccl) {  // multi node nccl more than two network card
         if (nccl_mode == NCCL_ALLREDUCE) {  // allreduce

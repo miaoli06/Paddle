@@ -29,9 +29,6 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_feed.pb.h"
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/pybind/box_helper_py.h"
-#ifdef PADDLE_WITH_BOX_PS
-#include <boxps_public.h>
-#endif
 
 namespace py = pybind11;
 

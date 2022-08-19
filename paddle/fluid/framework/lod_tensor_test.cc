@@ -279,7 +279,8 @@ TEST(LoD, ConvertToLengthBasedLoD) {
   offset_lod.push_back(std::vector<size_t>({0, 1, 3}));
   offset_lod.push_back(std::vector<size_t>({0, 2, 4, 5}));
 
-  LoD length_lod = phi::ConvertToLengthBasedLoD(offset_lod);
+  LoD length_lod;
+  phi::ConvertToLengthBasedLoD(offset_lod, &length_lod);
 
   LoD expected;
   expected.push_back(std::vector<size_t>({2}));

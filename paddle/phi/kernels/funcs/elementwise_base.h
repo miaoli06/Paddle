@@ -442,24 +442,22 @@ void ElementwiseCompute(const CPUContext &dev_ctx,
 }
 
 // for broadcast backwards
-static inline std::vector<int> GetReduceDim(const DDim &in,
-                                            const DDim &out,
-                                            int axis) {
+static inline void GetReduceDim(const DDim &in,
+                                const DDim &out,
+                                int axis, std::vector<int> *dims) {
   axis =
       (axis == -1 ? std::abs(static_cast<int>(out.size() - in.size())) : axis);
-  std::vector<int> dims;
   for (int i = 0; i < axis; ++i) {
-    dims.push_back(i);
+    dims->push_back(i);
   }
   for (int i = 0; i < in.size(); ++i) {
     if (out[i + axis] != in[i]) {
-      dims.push_back(i + axis);
+      dims->push_back(i + axis);
     }
   }
   for (int i = axis + in.size(); i < out.size(); ++i) {
-    dims.push_back(i);
+    dims->push_back(i);
   }
-  return dims;
 }
 
 template <typename DeviceContext, typename T>

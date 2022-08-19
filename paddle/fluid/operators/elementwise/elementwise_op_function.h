@@ -1587,10 +1587,10 @@ static inline void GetDoubleGradSafeTensor(
 }
 
 // for broadcast backwards
-static inline std::vector<int> GetReduceDim(const framework::DDim &in,
+static inline void GetReduceDim(const framework::DDim &in,
                                             const framework::DDim &out,
-                                            int axis) {
-  return phi::funcs::GetReduceDim(in, out, axis);
+                                            int axis, std::vector<int> *dims) {
+  phi::funcs::GetReduceDim(in, out, axis, dims);
 }
 
 #if defined(__NVCC__) || defined(__HIPCC__)

@@ -31,6 +31,8 @@ static std::once_flag white_list_init_flag;
 
 static int op_role_nan_inf_white_list = 0;
 
+static bool g_check_nan_inf_ret = false;
+
 static constexpr int FORWARD = 0x10000;
 
 // lazy init
@@ -61,6 +63,10 @@ static const std::unordered_map<std::string, int>& role_str2int() {
 static std::unordered_set<std::string>& op_type_nan_inf_white_list() {
   static std::unordered_set<std::string> _op_type_nan_inf_white_list = {
       "coalesce_tensor", /* This Op will alloc tensor, and may not init space */
+      "rank_attention",   // This Op input param too large init spent time too
+                          // long not zero
+      "c_mixallgather",   // This Op alloc more space not need init
+      "scaled_fc",        // This Op padding same not init data
   };
   return _op_type_nan_inf_white_list;
 }
@@ -127,6 +133,10 @@ static void InitWhiteListFormEnv() {
 
       op_var_nan_inf_white_list()[op].emplace_back(var);
     }
+  }
+  const char* nan_inf_ret = std::getenv("PADDLE_CHECK_INF_NAN_RET");
+  if (nan_inf_ret != NULL) {
+    g_check_nan_inf_ret = (atoi(nan_inf_ret) > 0);
   }
 }
 
@@ -637,7 +647,145 @@ void CheckOpHasNanOrInf(const framework::OperatorBase& op,
     }
   }
 }
+void CheckVarHasNanOrInfRet(const std::string& op_type,
+                            const framework::Variable* var,
+                            const std::string& var_name,
 
+                            const platform::Place& place, unsigned int* dnum) {
+  const Tensor* tensor{nullptr};
+  if (var->IsType<framework::LoDTensor>()) {
+    tensor = &var->Get<framework::LoDTensor>();
+  } else if (var->IsType<phi::SelectedRows>()) {
+    tensor = &var->Get<phi::SelectedRows>().value();
+  } else {
+    return;
+  }
+  if (tensor->memory_size() == 0) {
+    return;
+  }
+  if (!platform::is_gpu_place(tensor->place())) {
+    tensor_check<phi::CPUContext>(op_type, var_name, *tensor, place);
+    return;
+  }
+  CudaTensorCheckNanInf(*tensor, dnum);
+}
+static unsigned int* get_device_num_ptr(const platform::Place& place) {
+  unsigned int* num_ptr = nullptr;
+#ifdef PADDLE_WITH_CUDA
+  thread_local paddle::memory::AllocationPtr gpu_tensor = nullptr;
+  auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
+      platform::DeviceContextPool::Instance().Get(place));
+  if (gpu_tensor == nullptr) {
+    gpu_tensor = paddle::memory::Alloc(*dev_ctx, sizeof(unsigned int));
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemsetAsync(
+        gpu_tensor->ptr(), 0, sizeof(unsigned int), dev_ctx->stream()));
+  }
+  num_ptr = reinterpret_cast<unsigned int*>(gpu_tensor->ptr());
+#endif
+  return num_ptr;
+}
+bool CheckBatchNanOrInfRet(const platform::Place& place) {
+#ifdef PADDLE_WITH_CUDA
+  auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
+      platform::DeviceContextPool::Instance().Get(place));
+  auto stream = dev_ctx->stream();
+  unsigned int* num_ptr = get_device_num_ptr(place);
+  thread_local unsigned int nan_inf_num = 0;
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&nan_inf_num, num_ptr,
+                                              sizeof(unsigned int),
+                                              cudaMemcpyDeviceToHost, stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  if (nan_inf_num > 0) {
+    return true;
+  }
+#endif
+  return false;
+}
+bool CheckOpHasNanOrInfRet(const framework::OperatorBase& op,
+                           const framework::Scope& exec_scope,
+                           const platform::Place& place) {
+  std::call_once(white_list_init_flag, InitWhiteListFormEnv);
+
+  if (IsSkipOp(op)) return false;
+  unsigned int* num_ptr = get_device_num_ptr(place);
+  if (op_var_nan_inf_white_list().count(op.Type()) == 0) {
+    // NOTE. vname may destruct in the end of this func.
+    for (auto& vname : op.OutputVars(true)) {
+      auto* var = exec_scope.FindVar(vname);
+      if (var == nullptr) continue;
+      CheckVarHasNanOrInfRet(op.Type(), var, vname, place, num_ptr);
+    }
+  } else {
+    for (auto& vname : op.OutputVars(true)) {
+      bool need_check = true;
+      for (auto& white_vname : op_var_nan_inf_white_list().at(op.Type())) {
+        if (vname.find(white_vname) != std::string::npos) {
+          need_check = false;
+          break;
+        }
+      }
+      if (!need_check) continue;
+      auto* var = exec_scope.FindVar(vname);
+      if (var == nullptr) continue;
+      CheckVarHasNanOrInfRet(op.Type(), var, vname, place, num_ptr);
+    }
+  }
+  if (g_check_nan_inf_ret) {
+    // every op check
+    return CheckBatchNanOrInfRet(place);
+  }
+  return false;
+}
+
+void DumpTensorToFile(const std::string& path, const std::string& prefix,
+                      const std::string& iname, const Scope& exec_scope) {
+  auto* var = exec_scope.FindVar(iname);
+  if (var == nullptr) {
+    return;
+  }
+  if (!var->IsInitialized()) {
+    return;
+  }
+  auto& tensor = var->Get<framework::LoDTensor>();
+  if (!tensor.IsInitialized()) {
+    return;
+  }
+
+  std::ostringstream os;
+  if (var->IsType<phi::DenseTensor>()) {
+    os << var->Get<phi::DenseTensor>();
+  } else if (var->IsType<phi::SelectedRows>()) {
+    os << var->Get<phi::SelectedRows>().value();
+  }
+  os << "\n";
+  std::string s = os.str();
+
+  char file_name[2048] = {0};
+  snprintf(file_name, sizeof(file_name), "%s/%s_%s", path.c_str(),
+           prefix.c_str(), iname.c_str());
+
+  std::ofstream out(file_name, std::ios::binary);
+  out.write(s.c_str(), s.length());
+  out.close();
+}
+void DumpAllScope(const Scope& exec_scope, const platform::Place& place) {
+  int device_id = 0;
+#if defined(PADDLE_WITH_CUDA) && !defined(_WIN32)
+  device_id = place.GetDeviceId();
+#endif
+  VLOG(0) << "begin dump scope all tensor data, device id=" << device_id;
+  std::string log_path = "./nan_inf";
+  if (!PathExists(log_path)) {
+    MkDirRecursively(log_path.c_str());
+  }
+  // dump scope all data
+  char prefix[128] = {0};
+  snprintf(prefix, sizeof(prefix), "gpu%d", device_id);
+  for (auto& iname : exec_scope.LocalVarNames()) {
+    DumpTensorToFile(log_path, prefix, iname, exec_scope);
+  }
+  VLOG(0) << "end dump scope all tensor data, device id=" << device_id;
+}
 }  // namespace details
 }  // namespace framework
 }  // namespace paddle

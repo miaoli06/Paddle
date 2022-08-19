@@ -2371,6 +2371,8 @@ All parameter, weight, gradient are variables in Paddle.
   BindBoxHelper(&m);
 #ifdef PADDLE_WITH_BOX_PS
   BindBoxWrapper(&m);
+  // add filemgr
+  BindBoxFileMgr(&m);
 #endif
 #if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   BindNCCLWrapper(&m);

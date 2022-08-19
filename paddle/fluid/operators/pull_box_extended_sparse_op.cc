@@ -17,25 +17,23 @@
 namespace paddle {
 namespace operators {
 
-class PullBoxExtendedSparseOp : public framework::OperatorWithKernel {
- public:
+class PullBoxExtendedSparseOp: public framework::OperatorWithKernel {
+public:
   using framework::OperatorWithKernel::OperatorWithKernel;
-  void InferShape(framework::InferShapeContext* ctx) const override {
-    PADDLE_ENFORCE_GE(
-        ctx->Inputs("Ids").size(), 1UL,
+  void InferShape(framework::InferShapeContext *ctx) const override {
+    PADDLE_ENFORCE_GE(ctx->Inputs("Ids").size(), 1UL,
         platform::errors::InvalidArgument(
             "Inputs(Ids) of PullBoxExtendedSparseOp should not be empty."));
-    PADDLE_ENFORCE_GE(
-        ctx->Outputs("Out").size(), 1UL,
+    PADDLE_ENFORCE_GE(ctx->Outputs("Out").size(), 1UL,
         platform::errors::InvalidArgument(
             "Outputs(Out) of PullBoxExtendedSparseOp should not be empty."));
     PADDLE_ENFORCE_GE(ctx->Outputs("OutExtend").size(), 1UL,
-                      platform::errors::InvalidArgument(
-                          "Outputs(OutExtend) of PullBoxExtendedSparseOp "
-                          "should not be empty."));
+        platform::errors::InvalidArgument(
+            "Outputs(OutExtend) of PullBoxExtendedSparseOp "
+                "should not be empty."));
     auto emb_size = static_cast<int64_t>(ctx->Attrs().Get<int>("emb_size"));
-    auto emb_extended_size =
-        static_cast<int64_t>(ctx->Attrs().Get<int>("emb_extended_size"));
+    auto emb_extended_size = static_cast<int64_t>(ctx->Attrs().Get<int>(
+        "emb_extended_size"));
     auto all_ids_dim = ctx->GetInputsDim("Ids");
 
     const size_t n_ids = all_ids_dim.size();
@@ -44,54 +42,50 @@ class PullBoxExtendedSparseOp : public framework::OperatorWithKernel {
     auto expand_only = ctx->Attrs().Get<bool>("expand_only");
     auto flags = ctx->Attrs().Get<std::vector<int>>("mask");
     if (flags.empty()) {
-    for (size_t i = 0; i < n_ids; ++i) {
-      const auto ids_dims = all_ids_dim[i];
-      int ids_rank = ids_dims.size();
-        PADDLE_ENFORCE_EQ(
-            ids_dims[ids_rank - 1], 1,
-                        platform::errors::InvalidArgument(
-                            "Shape error in %lu id, the last dimension of the "
-                            "'Ids' tensor must be 1.",
-                            i));
+      for (size_t i = 0; i < n_ids; ++i) {
+        const auto ids_dims = all_ids_dim[i];
+        int ids_rank = ids_dims.size();
+        PADDLE_ENFORCE_EQ(ids_dims[ids_rank - 1], 1,
+            platform::errors::InvalidArgument(
+                "Shape error in %lu id, the last dimension of the "
+                    "'Ids' tensor must be 1.", i));
         auto out_dim = phi::vectorize(
-                phi::slice_ddim(ids_dims, 0, ids_rank - 1));
-      out_dim.push_back(emb_size);
+            phi::slice_ddim(ids_dims, 0, ids_rank - 1));
+        out_dim.push_back(emb_size);
         outs_dims.push_back(phi::make_ddim(out_dim));
         auto out_extended_dim = phi::vectorize(
-                phi::slice_ddim(ids_dims, 0, ids_rank - 1));
+            phi::slice_ddim(ids_dims, 0, ids_rank - 1));
         if (expand_only) {
-      out_extended_dim.push_back(emb_extended_size);
+          out_extended_dim.push_back(emb_extended_size);
         } else {
           out_extended_dim.push_back(emb_size + emb_extended_size);
-    }
+        }
         outs_extended_dims.push_back(phi::make_ddim(out_extended_dim));
       }
-    ctx->SetOutputsDim("Out", outs_dims);
-    ctx->SetOutputsDim("OutExtend", outs_extended_dims);
+      ctx->SetOutputsDim("Out", outs_dims);
+      ctx->SetOutputsDim("OutExtend", outs_extended_dims);
 
-    for (size_t i = 0; i < n_ids; ++i) {
-      ctx->ShareLoD("Ids", "Out", i, i);
-      ctx->ShareLoD("Ids", "OutExtend", i, i);
-    }
+      for (size_t i = 0; i < n_ids; ++i) {
+        ctx->ShareLoD("Ids", "Out", i, i);
+        ctx->ShareLoD("Ids", "OutExtend", i, i);
+      }
     } else {
       for (size_t i = 0; i < n_ids; ++i) {
         const auto ids_dims = all_ids_dim[i];
         int ids_rank = ids_dims.size();
-        PADDLE_ENFORCE_EQ(
-            ids_dims[ids_rank - 1], 1,
+        PADDLE_ENFORCE_EQ(ids_dims[ids_rank - 1], 1,
             platform::errors::InvalidArgument(
                 "Shape error in %lu id, the last dimension of the "
-                "'Ids' tensor must be 1.",
-                i));
+                    "'Ids' tensor must be 1.", i));
         if (flags[i] & 0x01) {
           auto out_dim = phi::vectorize(
-                  phi::slice_ddim(ids_dims, 0, ids_rank - 1));
+              phi::slice_ddim(ids_dims, 0, ids_rank - 1));
           out_dim.push_back(emb_size);
           outs_dims.push_back(phi::make_ddim(out_dim));
-  }
+        }
         if (flags[i] & 0x02) {
           auto out_extended_dim = phi::vectorize(
-                  phi::slice_ddim(ids_dims, 0, ids_rank - 1));
+              phi::slice_ddim(ids_dims, 0, ids_rank - 1));
           if (expand_only) {
             out_extended_dim.push_back(emb_extended_size);
           } else {
@@ -118,34 +112,33 @@ class PullBoxExtendedSparseOp : public framework::OperatorWithKernel {
     }
   }
 
- protected:
+protected:
   framework::OpKernelType GetExpectedKernelType(
-      const framework::ExecutionContext& ctx) const override {
+      const framework::ExecutionContext &ctx) const override {
     return framework::OpKernelType(framework::proto::VarType::FP32,
-                                   ctx.device_context());
+        ctx.device_context());
   }
 };
 
-class PullBoxExtendedSparseOpMaker : public framework::OpProtoAndCheckerMaker {
- public:
+class PullBoxExtendedSparseOpMaker: public framework::OpProtoAndCheckerMaker {
+public:
   void Make() override {
-    AddInput("Ids",
-             "Input tensors with type int32 or int64 "
-             "contains the ids to be looked up in BoxPS. "
-             "The last dimension size must be 1.")
-        .AsDuplicable();
+    AddInput("Ids", "Input tensors with type int32 or int64 "
+        "contains the ids to be looked up in BoxPS. "
+        "The last dimension size must be 1.").AsDuplicable();
     AddOutput("Out", "The lookup results tensors.").AsDuplicable();
-    AddOutput("OutExtend", "The lookup extended results tensors.")
-        .AsDuplicable();
+    AddOutput("OutExtend", "The lookup extended results tensors.").AsDuplicable();
     AddAttr<int>("emb_size", "(int, the embedding hidden size").SetDefault(1);
     AddAttr<int>("emb_extended_size",
-                 "(int, the extended_embedding hidden size")
-        .SetDefault(128);
-    AddAttr<std::vector<int>>("mask", "The embedx expand mask.").SetDefault({});
-    AddAttr<int>("offset", "(int, the skip pull value cvm offset")
-        .SetDefault(0);
-    AddAttr<bool>("expand_only","bool, expand output with show clk embed or not").SetDefault(true);
-    AddComment(R"DOC(
+        "(int, the extended_embedding hidden size").SetDefault(128);
+    AddAttr<std::vector<int>>("mask", "The embedx expand mask.").SetDefault(
+        { });
+    AddAttr<int>("offset", "(int, the skip pull value cvm offset").SetDefault(
+        0);
+    AddAttr<bool>("expand_only",
+        "bool, expand output with show clk embed or not").SetDefault(true);
+    AddComment(
+        R"DOC(
 Pull Box Extended Sparse Operator.
 
 This operator is used to perform lookups on the BoxPS,
@@ -158,35 +151,36 @@ or not. And the output only shares the LoD information with input Ids.
   }
 };
 
-template <typename T>
-class PushBoxExtendedSparseOpMaker : public framework::SingleGradOpMaker<T> {
- public:
+template<typename T>
+class PushBoxExtendedSparseOpMaker: public framework::SingleGradOpMaker<T> {
+public:
   using framework::SingleGradOpMaker<T>::SingleGradOpMaker;
 
- protected:
+protected:
   void Apply(GradOpPtr<T> op) const override {
     op->SetType("push_box_extended_sparse");
     op->SetInput("Ids", this->Input("Ids"));
     op->SetInput(framework::GradVarName("Out"), this->OutputGrad("Out"));
     op->SetInput(framework::GradVarName("OutExtend"),
-                 this->OutputGrad("OutExtend"));
+        this->OutputGrad("OutExtend"));
     op->SetOutput(framework::GradVarName("Out"), this->OutputGrad("Out"));
     op->SetAttrMap(this->Attrs());
   }
 };
 
-class PushBoxExtendedSparseOp : public framework::OperatorWithKernel {
- public:
+class PushBoxExtendedSparseOp: public framework::OperatorWithKernel {
+public:
   using framework::OperatorWithKernel::OperatorWithKernel;
 
-  void InferShape(framework::InferShapeContext* ctx) const override {}
+  void InferShape(framework::InferShapeContext *ctx) const override {
+  }
 
- protected:
+protected:
   framework::OpKernelType GetExpectedKernelType(
-      const framework::ExecutionContext& ctx) const override {
-    return framework::OpKernelType(OperatorWithKernel::IndicateVarDataType(
-                                       ctx, framework::GradVarName("Out")),
-                                   ctx.device_context());
+      const framework::ExecutionContext &ctx) const override {
+    return framework::OpKernelType(
+        OperatorWithKernel::IndicateVarDataType(ctx,
+            framework::GradVarName("Out")), ctx.device_context());
   }
 };
 
@@ -194,8 +188,7 @@ class PushBoxExtendedSparseOp : public framework::OperatorWithKernel {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OPERATOR(
-    pull_box_extended_sparse, ops::PullBoxExtendedSparseOp,
+REGISTER_OPERATOR(pull_box_extended_sparse, ops::PullBoxExtendedSparseOp,
     ops::PullBoxExtendedSparseOpMaker,
     ops::PushBoxExtendedSparseOpMaker<paddle::framework::OpDesc>,
     ops::PushBoxExtendedSparseOpMaker<paddle::imperative::OpBase>);
@@ -203,9 +196,9 @@ REGISTER_OPERATOR(
 REGISTER_OPERATOR(push_box_extended_sparse, ops::PushBoxExtendedSparseOp);
 
 REGISTER_OP_CPU_KERNEL(pull_box_extended_sparse,
-                       ops::PullBoxExtendedSparseCPUKernel<float>,
-                       ops::PullBoxExtendedSparseCPUKernel<double>);
+    ops::PullBoxExtendedSparseCPUKernel<float>,
+    ops::PullBoxExtendedSparseCPUKernel<double>);
 
 REGISTER_OP_CPU_KERNEL(push_box_extended_sparse,
-                       ops::PushBoxExtendedSparseCPUKernel<float>,
-                       ops::PushBoxExtendedSparseCPUKernel<double>);
+    ops::PushBoxExtendedSparseCPUKernel<float>,
+    ops::PushBoxExtendedSparseCPUKernel<double>);

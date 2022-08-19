@@ -27,8 +27,8 @@ void ReduceWrapper(const GPUContext &dev_ctx,
                    int axis,
                    DenseTensor *src,
                    DenseTensor *dst) {
-  std::vector<int> reduce_dims =
-      funcs::GetReduceDim(dst->dims(), src->dims(), axis);
+  std::vector<int> reduce_dims;
+  funcs::GetReduceDim(dst->dims(), src->dims(), axis, &reduce_dims);
   funcs::ReduceKernel<T, T, kps::AddFunctor, kps::IdentityFunctor<T>>(
       dev_ctx, *src, dst, kps::IdentityFunctor<T>(), reduce_dims);
 }
@@ -112,31 +112,37 @@ void GetGradXOrYOut(const GPUContext &dev_ctx,
 
 template <typename T>
 static __global__ void SimpleElemwiseAddGradCUDAKernel(
-    const T *__restrict__ dout, int size, int vec_size, T *dx, T *dy) {
-  int tid = BLOCK_ID_X * BLOCK_NUM_X + THREAD_ID_X;
-  int stride = GRID_NUM_X * BLOCK_NUM_X;
-  int loop = size / vec_size;
-  int remainder = size % vec_size;
-  const float4 *dout_vec = reinterpret_cast<const float4 *>(dout);
-  float4 *dx_vec = reinterpret_cast<float4 *>(dx);
-  float4 *dy_vec = reinterpret_cast<float4 *>(dy);
-  float4 tmp_loop;
-
-  for (int i = tid; i < loop; i += stride) {
-    tmp_loop = dout_vec[i];
-    dx_vec[i] = tmp_loop;
-    dy_vec[i] = tmp_loop;
-  }
-
-  if (tid == loop && remainder != 0) {
-    T tmp_rem;
-    while (remainder) {
-      int idx = size - remainder;
-      remainder--;
-      tmp_rem = dout[idx];
-      dx[idx] = tmp_rem;
-      dy[idx] = tmp_rem;
-    }
+    const T *__restrict__ dout, int size, T *dx, T *dy) {
+//  int tid = BLOCK_ID_X * BLOCK_NUM_X + THREAD_ID_X;
+//  int stride = GRID_NUM_X * BLOCK_NUM_X;
+//  int loop = size / vec_size;
+//  int remainder = size % vec_size;
+//  const float4 *dout_vec = reinterpret_cast<const float4 *>(dout);
+//  float4 *dx_vec = reinterpret_cast<float4 *>(dx);
+//  float4 *dy_vec = reinterpret_cast<float4 *>(dy);
+//  float4 tmp_loop;
+//
+//  for (int i = tid; i < loop; i += stride) {
+//    tmp_loop = dout_vec[i];
+//    dx_vec[i] = tmp_loop;
+//    dy_vec[i] = tmp_loop;
+//  }
+//
+//  if (tid == loop && remainder != 0) {
+//    T tmp_rem;
+//    while (remainder) {
+//      int idx = size - remainder;
+//      remainder--;
+//      tmp_rem = dout[idx];
+//      dx[idx] = tmp_rem;
+//      dy[idx] = tmp_rem;
+//    }
+//  }
+  int col = blockIdx.x * blockDim.x + threadIdx.x;
+  while (col < size) {
+    dx[col] = dout[col];
+    dy[col] = dout[col];
+    col += blockDim.x * gridDim.x;
   }
 }
 
@@ -165,8 +171,8 @@ void DefaultElementwiseAddGrad(const GPUContext &ctx,
         dx->clear();
         dx->mutable_data<T>(x.dims(), ctx.GetPlace());
       }
-      std::vector<int> reduce_dims =
-          funcs::GetReduceDim(x.dims(), out.dims(), axis);
+      std::vector<int> reduce_dims;
+      funcs::GetReduceDim(x.dims(), out.dims(), axis, &reduce_dims);
       funcs::ReduceKernel<T, T, kps::AddFunctor, kps::IdentityFunctor<T>>(
           ctx, dout, dx, kps::IdentityFunctor<T>(), reduce_dims);
     }
@@ -179,8 +185,8 @@ void DefaultElementwiseAddGrad(const GPUContext &ctx,
         phi::Copy(ctx, dout, ctx.GetPlace(), false, dy);
       }
     } else {
-      std::vector<int> reduce_dims =
-          funcs::GetReduceDim(y.dims(), out.dims(), axis);
+      std::vector<int> reduce_dims;
+      funcs::GetReduceDim(y.dims(), out.dims(), axis, &reduce_dims);
       funcs::ReduceKernel<T, T, kps::AddFunctor, kps::IdentityFunctor<T>>(
           ctx, dout, dy, kps::IdentityFunctor<T>(), reduce_dims);
     }
@@ -195,34 +201,36 @@ void ElementwiseAddGrad(const GPUContext &ctx,
                         const DenseTensor &dout,
                         DenseTensor *dx,
                         DenseTensor *dy) {
-  ctx.template Alloc<T>(dx);
-  ctx.template Alloc<T>(dy);
-  auto *dx_data = dx->data<T>();
-  auto *dy_data = dy->data<T>();
+//  ctx.template Alloc<T>(dx);
+//  ctx.template Alloc<T>(dy);
+  auto &place = ctx.GetPlace();
+  auto *dx_data = dx->mutable_data<T>(place);
+  auto *dy_data = dy->mutable_data<T>(place);
   auto *dout_data = dout.data<T>();
   if (dx_data == dout_data && dy_data != dout_data) {
     VLOG(4) << "Special case when dx_data is the same as dout_data, "
                "only need copy dout to dy";
-    phi::Copy(ctx, dout, ctx.GetPlace(), false, dy);
+    phi::Copy(ctx, dout, place, false, dy);
   } else if (dx_data != dout_data && dy_data == dout_data) {
     VLOG(4) << "Special case when dy_data is the same as dout_data, "
                "only need copy dout to dx";
-    phi::Copy(ctx, dout, ctx.GetPlace(), false, dx);
+    phi::Copy(ctx, dout, place, false, dx);
   } else if (dx_data != dout_data && dy_data != dout_data) {
+//    auto size = x.numel();
+//    int vec_size = max(static_cast<int>(sizeof(float4) / sizeof(T)), 1);
+//    dim3 block_size = dim3(PREDEFINED_BLOCK_SIZE, 1);
+//    dim3 grid_size =
+//        dim3(((size + vec_size - 1) / vec_size + PREDEFINED_BLOCK_SIZE - 1) /
+//                 PREDEFINED_BLOCK_SIZE,
+//             1);
     auto size = x.numel();
-    int vec_size = max(static_cast<int>(sizeof(float4) / sizeof(T)), 1);
-    dim3 block_size = dim3(PREDEFINED_BLOCK_SIZE, 1);
-    dim3 grid_size =
-        dim3(((size + vec_size - 1) / vec_size + PREDEFINED_BLOCK_SIZE - 1) /
-                 PREDEFINED_BLOCK_SIZE,
-             1);
+    int64_t grid_size = (size + PREDEFINED_BLOCK_SIZE - 1) / PREDEFINED_BLOCK_SIZE;
     SimpleElemwiseAddGradCUDAKernel<T>
-        <<<grid_size, block_size, 0, ctx.stream()>>>(
+        <<<grid_size, PREDEFINED_BLOCK_SIZE, 0, ctx.stream()>>>(
             dout.data<T>(),
             size,
-            vec_size,
-            dx->mutable_data<T>(ctx.GetPlace()),
-            dy->mutable_data<T>(ctx.GetPlace()));
+            dx_data,
+            dy_data);
   } else {
     VLOG(4) << "Special case when dy_data is the same as dout_data, "
                "and dx_data is the same as dout_data, do not need "
@@ -276,8 +284,8 @@ void default_elementwise_sub_grad(const GPUContext &ctx,
         dx->clear();
         dx->mutable_data<T>(x.dims(), ctx.GetPlace());
       }
-      std::vector<int> reduce_dims =
-          funcs::GetReduceDim(x.dims(), out.dims(), axis);
+      std::vector<int> reduce_dims;
+      funcs::GetReduceDim(x.dims(), out.dims(), axis, &reduce_dims);
       funcs::ReduceKernel<T, T, kps::AddFunctor, kps::IdentityFunctor<T>>(
           ctx, dout, dx, kps::IdentityFunctor<T>(), reduce_dims);
     }
@@ -299,8 +307,8 @@ void default_elementwise_sub_grad(const GPUContext &ctx,
                 dy->mutable_data<T>(ctx.GetPlace()));
       }
     } else {
-      std::vector<int> reduce_dims =
-          funcs::GetReduceDim(y.dims(), out.dims(), axis);
+      std::vector<int> reduce_dims;
+      funcs::GetReduceDim(y.dims(), out.dims(), axis, &reduce_dims);
       funcs::ReduceKernel<T, T, kps::AddFunctor, kps::InverseFunctor<T>>(
           ctx, dout, dy, kps::InverseFunctor<T>(), reduce_dims);
     }
