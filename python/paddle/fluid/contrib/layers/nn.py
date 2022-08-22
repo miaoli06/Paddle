@@ -1600,7 +1600,7 @@ def rank_attention2(input,
     return output
 
 
-def batch_fc(input, param_size, param_attr, bias_size, bias_attr, act=None):
+def batch_fc(input, param_size, param_attr, bias_size, bias_attr, act=None, batchcount=0):
     """
     **Batch FC layer**
     This Op can calculate BatchFC. This is similar to matmul op, 
@@ -1641,10 +1641,11 @@ def batch_fc(input, param_size, param_attr, bias_size, bias_attr, act=None):
     helper = LayerHelper("batch_fc", **locals())
     check_type(input, 'input', (Variable), 'batch_fc')
     input_shape = input.shape
-    assert input_shape[0] == param_size[0]
-    assert input_shape[2] == param_size[1]
-    assert param_size[2] == bias_size[1]
-    assert input_shape[0] == bias_size[0]
+    if batchcount is 0:
+        assert input_shape[0] == param_size[0]
+        assert input_shape[2] == param_size[1]
+        assert param_size[2] == bias_size[1]
+        assert input_shape[0] == bias_size[0]
 
     dtype = helper.input_dtype()
     check_dtype(dtype, 'input', ['float32', 'float64'], 'batch_fc')
@@ -1664,6 +1665,7 @@ def batch_fc(input, param_size, param_attr, bias_size, bias_attr, act=None):
                          "W": w,
                          "Bias": b
                      },
+                     attrs={'batchcount': batchcount},
                      outputs={"Out": pre_act})
     return helper.append_activation(pre_act)
 

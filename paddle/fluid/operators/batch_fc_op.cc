@@ -43,37 +43,54 @@ class BatchFCOp : public framework::OperatorWithKernel {
     auto input_dims = ctx->GetInputDim("Input");
     auto w_dims = ctx->GetInputDim("W");
 
-    PADDLE_ENFORCE_EQ(input_dims.size(),
-                      3,
-                      platform::errors::InvalidArgument(
-                          "Input of BatchFCOp should have 3D."));
-    PADDLE_ENFORCE_EQ(
-        w_dims.size(),
-        3,
-        platform::errors::InvalidArgument("W of BatchFCOp should have 3D."));
-    PADDLE_ENFORCE_EQ(
-        input_dims[0],
-        w_dims[0],
-        platform::errors::InvalidArgument(
-            "Input.dim[0] and W.dim[0] of BatchFCOp should be same."));
-    PADDLE_ENFORCE_EQ(
-        input_dims[2],
-        w_dims[1],
-        platform::errors::InvalidArgument(
-            "Input.dim[2] and W.dim[1] of BatchFCOp should be same."));
+    int batchcount = ctx->Attrs().Get<int>("batchcount");
+    if (batchcount > 0) {
+      int feature_dim = input_dims[1] / batchcount;
+      PADDLE_ENFORCE_EQ(feature_dim, w_dims[0],
+                        platform::errors::InvalidArgument(
+                            "Input.dim[1]/batchcount and W.dim[0] of BatchFCOp "
+                            "should be same."));
 
-    auto bias_dims = ctx->GetInputDim("Bias");
-    PADDLE_ENFORCE_EQ(bias_dims[0],
-                      input_dims[0],
-                      platform::errors::InvalidArgument(
-                          "Bias.dim[0] should be same as input.dim[0]."));
-    PADDLE_ENFORCE_EQ(bias_dims[1],
-                      w_dims[2],
-                      platform::errors::InvalidArgument(
-                          "Bias.dim[1] should be same as input.dim[2]."));
+      auto bias_dims = ctx->GetInputDim("Bias");
+      PADDLE_ENFORCE_EQ(bias_dims[1], w_dims[1],
+                        platform::errors::InvalidArgument(
+                            "Bias.dim[1] should be same as W.dim[1]."));
 
-    ctx->SetOutputDim("Out", {input_dims[0], input_dims[1], w_dims[2]});
-    ctx->ShareLoD("Input", /*->*/ "Out");
+      ctx->SetOutputDim("Out", {input_dims[0], w_dims[1]});
+      ctx->ShareLoD("Input", /*->*/ "Out");
+    } else {
+      PADDLE_ENFORCE_EQ(input_dims.size(),
+                        3,
+                        platform::errors::InvalidArgument(
+                            "Input of BatchFCOp should have 3D."));
+      PADDLE_ENFORCE_EQ(
+          w_dims.size(),
+          3,
+          platform::errors::InvalidArgument("W of BatchFCOp should have 3D."));
+      PADDLE_ENFORCE_EQ(
+          input_dims[0],
+          w_dims[0],
+          platform::errors::InvalidArgument(
+              "Input.dim[0] and W.dim[0] of BatchFCOp should be same."));
+      PADDLE_ENFORCE_EQ(
+          input_dims[2],
+          w_dims[1],
+          platform::errors::InvalidArgument(
+              "Input.dim[2] and W.dim[1] of BatchFCOp should be same."));
+
+      auto bias_dims = ctx->GetInputDim("Bias");
+      PADDLE_ENFORCE_EQ(bias_dims[0],
+                        input_dims[0],
+                        platform::errors::InvalidArgument(
+                            "Bias.dim[0] should be same as input.dim[0]."));
+      PADDLE_ENFORCE_EQ(bias_dims[1],
+                        w_dims[2],
+                        platform::errors::InvalidArgument(
+                            "Bias.dim[1] should be same as input.dim[2]."));
+
+      ctx->SetOutputDim("Out", {input_dims[0], input_dims[1], w_dims[2]});
+      ctx->ShareLoD("Input", /*->*/ "Out");
+    }
   }
 
  protected:
@@ -121,6 +138,7 @@ class BatchFCOpMaker : public framework::OpProtoAndCheckerMaker {
     AddInput("W", "(Tensor) Input tensor of batch_fc_op operator.");
     AddInput("Bias", "(Tensor) Input tensor of batch_fc_op operator.");
     AddOutput("Out", "Output tensor of batch_fc_op operator.");
+    AddAttr<int>("batchcount", "(int64_t) the batchcount").SetDefault(0);
     AddComment(R"DOC(
 BatchFC Operator.
 Notice: It currently supports GPU device.
