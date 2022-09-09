@@ -624,6 +624,10 @@ class BoxWrapper {
   int GetExpandEmbedDim(void) { return expand_embed_dim_; }
   // shrink boxps resource
   void ShrinkResource(void) { return boxps_ptr_->ShrinkResource(); }
+  // merge model interface
+  int MergeModel(const std::string& path) {
+    return boxps_ptr_->MergeModel(path);
+  }
   // get device id
   int GetPlaceDeviceId(const paddle::platform::Place& place) {
     if (platform::is_gpu_place(place)) {

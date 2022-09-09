@@ -112,6 +112,8 @@ void BindBoxWrapper(py::module* m) {
       .def("load_ssd2mem", &framework::BoxWrapper::LoadSSD2Mem,
            py::call_guard<py::gil_scoped_release>())
       .def("shrink_resource", &framework::BoxWrapper::ShrinkResource,
+           py::call_guard<py::gil_scoped_release>())
+      .def("merge_model", &framework::BoxWrapper::MergeModel,
            py::call_guard<py::gil_scoped_release>());
 }  // end BoxWrapper
 void BindBoxFileMgr(py::module* m) {
