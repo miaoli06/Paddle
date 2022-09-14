@@ -76,6 +76,12 @@ if(WITH_BOX_PS)
       SRCS box_wrapper.cc box_wrapper.cu box_wrapper_impl.cc
       DEPS framework_proto lod_tensor box_ps)
   endif()
+  if(WITH_XPU)
+  	cc_library(
+   	   box_wrapper
+      SRCS box_wrapper.cc box_wrapper_impl.cc
+      DEPS framework_proto lod_tensor box_ps)
+  endif()
 else()
   cc_library(
     box_wrapper

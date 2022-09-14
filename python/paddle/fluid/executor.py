@@ -1689,8 +1689,8 @@ class Executor(object):
         return res
 
     def _dump_debug_info(self, program=None, trainer=None):
-        print("program_id: {}, trainer_desc:\n {}".format(
-            id(program), str(trainer)))
+        with open(str(id(program)) + "_train_desc.prototxt", "w") as fout:
+            fout.write(str(trainer))
         if program._fleet_opt and "fleet_desc" in program._fleet_opt:
             with open("fleet_desc.prototxt", "w") as fout:
                 fout.write(str(program._fleet_opt["fleet_desc"]))
@@ -1893,9 +1893,7 @@ class Executor(object):
         trainer._set_infer(is_infer)
         trainer._gen_trainer_desc()
 
-        if program._pipeline_opt is None:
-            if program._heter_pipeline_opt is None:
-                self._dump_debug_info(program=program, trainer=trainer)
+        self._dump_debug_info(program=program, trainer=trainer)
         # warning if dataset not set psgpu in psgpu mode
         if not getattr(dataset, "use_ps_gpu", False) and trainer.proto_desc.use_ps_gpu:
             logging.warning("dataset should call set_use_ps_gpu in PsGpu mode")

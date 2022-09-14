@@ -145,3 +145,11 @@ REGISTER_OP_CUDA_KERNEL(
     ops::SliceMultiTensorOpKernel<GPUCtx, float>,
     ops::SliceMultiTensorOpKernel<GPUCtx, double>);
 #endif
+#if defined(PADDLE_WITH_XPU)
+using XPUCtx = phi::XPUContext;
+REGISTER_OP_XPU_KERNEL(
+    slice_multi_tensor,
+    ops::SliceMultiTensorOpKernel<XPUCtx, float>,
+    ops::SliceMultiTensorOpKernel<XPUCtx, double>,
+    ops::SliceMultiTensorOpKernel<XPUCtx, int>);
+#endif

@@ -16,7 +16,9 @@
 #include "paddle/fluid/operators/fused/fused_seqpool_cvm_with_pcoc_op.h"
 #include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
-
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_BOX_PS)
+#include "paddle/fluid/framework/fleet/box_wrapper.h"
+#endif
 namespace paddle {
 namespace operators {
 
@@ -462,7 +464,7 @@ class FusedSeqpoolCVMWithPCOCGradCUDAKernel : public framework::OpKernel<T> {
     auto place = ctx.GetPlace();
     int device_id = place.GetDeviceId();
     LoDTensor *qvalue_tensor = NULL;
-#ifdef PADDLE_WITH_BOX_PS
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_BOX_PS)
     qvalue_tensor =
         &(paddle::framework::BoxWrapper::GetInstance()->GetQTensor(device_id));
 #else

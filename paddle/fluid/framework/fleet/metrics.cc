@@ -19,9 +19,7 @@
 #include <numeric>
 
 #include "paddle/fluid/framework/lod_tensor.h"
-#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
-#endif
+#include "paddle/fluid/framework/tensor_util.h"
 #ifdef PADDLE_WITH_BOX_PS
 #include <boxps_extends.h>
 #endif
@@ -85,23 +83,18 @@ void BasicAucCalculator::add_unlock_data(double pred, int label,
 void BasicAucCalculator::add_data(
         const float* d_pred, const int64_t* d_label,
         int batch_size, const paddle::platform::Place& place) {
-  if (platform::is_gpu_place(place)) {
-#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+  if (platform::is_gpu_place(place) || platform::is_xpu_place(place)) {
     thread_local std::vector<float> h_pred;
     thread_local std::vector<int64_t> h_label;
     h_pred.resize(batch_size);
     h_label.resize(batch_size);
-    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
-        cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size,
-        cudaMemcpyDeviceToHost);
+    SyncCopyD2H(h_pred.data(), d_pred, batch_size);
+    SyncCopyD2H(h_label.data(), d_label, batch_size);
+
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
       add_unlock_data(h_pred[i], h_label[i]);
     }
-#else
-    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
-#endif
   } else {
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
@@ -114,24 +107,18 @@ void BasicAucCalculator::add_sample_data(
     const float* d_pred, const int64_t* d_label,
     const std::vector<float>& d_sample_scale, int batch_size,
     const paddle::platform::Place& place) {
-  if (platform::is_gpu_place(place)) {
-#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+  if (platform::is_gpu_place(place) || platform::is_xpu_place(place)) {
     thread_local std::vector<float> h_pred;
     thread_local std::vector<int64_t> h_label;
     h_pred.resize(batch_size);
     h_label.resize(batch_size);
-    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
-        cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size,
-        cudaMemcpyDeviceToHost);
+    SyncCopyD2H(h_pred.data(), d_pred, batch_size);
+    SyncCopyD2H(h_label.data(), d_label, batch_size);
 
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
       add_unlock_data(h_pred[i], h_label[i], d_sample_scale[i]);
     }
-#else
-    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
-#endif
   } else {
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
@@ -145,20 +132,16 @@ void BasicAucCalculator::add_mask_data(const float* d_pred,
                                        const int64_t* d_label,
                                        const int64_t* d_mask, int batch_size,
                                        const paddle::platform::Place& place) {
-  if (platform::is_gpu_place(place)) {
-#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+  if (platform::is_gpu_place(place) || platform::is_xpu_place(place)) {
     thread_local std::vector<float> h_pred;
     thread_local std::vector<int64_t> h_label;
     thread_local std::vector<int64_t> h_mask;
     h_pred.resize(batch_size);
     h_label.resize(batch_size);
     h_mask.resize(batch_size);
-    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
-        cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_label.data(), d_label, sizeof(int64_t) * batch_size,
-        cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_mask.data(), d_mask, sizeof(int64_t) * batch_size,
-        cudaMemcpyDeviceToHost);
+    SyncCopyD2H(h_pred.data(), d_pred, batch_size);
+    SyncCopyD2H(h_label.data(), d_label, batch_size);
+    SyncCopyD2H(h_mask.data(), d_mask, batch_size);
 
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
@@ -166,9 +149,6 @@ void BasicAucCalculator::add_mask_data(const float* d_pred,
         add_unlock_data(h_pred[i], h_label[i]);
       }
     }
-#else
-    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
-#endif
   } else {
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
@@ -324,8 +304,7 @@ void BasicAucCalculator::add_uid_data(const float* d_pred,
                                       const int64_t* d_uid,
                                       int batch_size,
                                       const paddle::platform::Place& place) {
-  if (platform::is_gpu_place(place)) {
-#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
+  if (platform::is_gpu_place(place) || platform::is_xpu_place(place)) {
     thread_local std::vector<float> h_pred;
     thread_local std::vector<int64_t> h_label;
     thread_local std::vector<uint64_t> h_uid;
@@ -333,20 +312,15 @@ void BasicAucCalculator::add_uid_data(const float* d_pred,
     h_label.resize(batch_size);
     h_uid.resize(batch_size);
 
-    cudaMemcpy(h_pred.data(), d_pred, sizeof(float) * batch_size,
-            cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_label.data(), d_label, sizeof(float) * batch_size,
-            cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_uid.data(), d_uid, sizeof(float) * batch_size,
-            cudaMemcpyDeviceToHost);
+    SyncCopyD2H(h_pred.data(), d_pred, batch_size);
+    SyncCopyD2H(h_label.data(), d_label, batch_size);
+    SyncCopyD2H(h_uid.data(), reinterpret_cast<const uint64_t *>(d_uid), batch_size);
+
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {
       add_uid_unlock_data(h_pred[i], h_label[i],
           static_cast<uint64_t>(h_uid[i]));
     }
-#else
-    PADDLE_THROW(phi::errors::Unimplemented("not supported on GPU platform."));
-#endif
   } else {
     std::lock_guard<std::mutex> lock(_table_mutex);
     for (int i = 0; i < batch_size; ++i) {

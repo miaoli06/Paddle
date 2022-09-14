@@ -28,6 +28,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                                 const int hidden_size,
                                    const int expand_embed_dim,
                                    const int skip_offset, bool expand_only) {
+#if defined(PADDLE_WITH_CUDA)
   //  VLOG(3) << "Begin PullSparse";
   int device_id = place.GetDeviceId();
   DeviceBoxData& dev = device_caches_[device_id];
@@ -169,6 +170,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                       expand_only);
   }
   all_timer.Pause();
+#endif
 }
 
 void BoxWrapper::PullSparseCaseCPU(const paddle::platform::Place& place,
@@ -278,6 +280,7 @@ void BoxWrapper::PushSparseGradCaseGPU(
     const std::vector<int64_t>& slot_lengths, const int hidden_size,
     const int expand_embed_dim, const int batch_size, const int skip_offset,
     bool expand_only) {
+#if defined(PADDLE_WITH_CUDA)
   int device_id = place.GetDeviceId();
   DeviceBoxData& dev = device_caches_[device_id];
   platform::Timer& all_timer = dev.all_push_timer;
@@ -366,6 +369,7 @@ void BoxWrapper::PushSparseGradCaseGPU(
     push_boxps_timer.Pause();
   }
   all_timer.Pause();
+#endif
 }
 
 void BoxWrapper::PushSparseGradCaseCPU(

@@ -1743,7 +1743,7 @@ void OperatorWithKernel::RunImpl(const Scope& scope,
   }
 
   if (FLAGS_check_nan_inf) {
-//    framework::details::CheckOpHasNanOrInf(*this, exec_scope, place);
+#if defined(PADDLE_WITH_CUDA)
     if (framework::details::CheckOpHasNanOrInfRet(*this, exec_scope, place)) {
       framework::details::DumpAllScope(exec_scope, place);
       // dump current op data
@@ -1776,6 +1776,9 @@ void OperatorWithKernel::RunImpl(const Scope& scope,
       PADDLE_ENFORCE(false, "ERROR: check INF and NAN: %s",
                      DebugStringEx(&exec_scope).c_str());
     }
+#else
+    framework::details::CheckOpHasNanOrInf(*this, exec_scope, place);
+#endif
   }
 
   // To solve issue #15032, have a discussion with @Luotao for cpu inference,
@@ -1928,15 +1931,26 @@ void OperatorWithKernel::ChooseKernel(const ExecutionContext& ctx) const {
 #endif
 
 #if defined(PADDLE_WITH_XPU) && !defined(PADDLE_WITH_XPU_KP)
-  if (platform::is_xpu_place(expected_kernel_key.place_) &&
-      (kernel_iter == kernels.end() ||
-       !paddle::platform::is_xpu_support_op(type_, expected_kernel_key) ||
-       paddle::platform::is_in_xpu_black_list(type_))) {
-    VLOG(3) << "fluid missing XPU kernel: " << type_
-            << ", expected_kernel_key:" << expected_kernel_key
-            << ", fallbacking to CPU one!";
-    expected_kernel_key.place_ = platform::CPUPlace();
-    kernel_iter = kernels.find(expected_kernel_key);
+  if (platform::is_xpu_place(expected_kernel_key.place_)) {
+    if (kernel_iter == kernels.end()) {
+      VLOG(3) << "fluid missing XPU kernel: " << type_
+              << ", expected_kernel_key:" << expected_kernel_key
+              << ", fallbacking to CPU one!";
+      expected_kernel_key.place_ = platform::CPUPlace();
+      kernel_iter = kernels.find(expected_kernel_key);
+    } else if (!paddle::platform::is_xpu_support_op(type_, expected_kernel_key)) {
+      VLOG(3) << "fluid XPU not support kernel: " << type_
+              << ", expected_kernel_key:" << expected_kernel_key
+              << ", fallbacking to CPU one!";
+      expected_kernel_key.place_ = platform::CPUPlace();
+      kernel_iter = kernels.find(expected_kernel_key);
+    } else if (paddle::platform::is_in_xpu_black_list(type_)) {
+      VLOG(3) << "fluid XPU is in black list kernel: " << type_
+              << ", expected_kernel_key:" << expected_kernel_key
+              << ", fallbacking to CPU one!";
+      expected_kernel_key.place_ = platform::CPUPlace();
+      kernel_iter = kernels.find(expected_kernel_key);
+    }
   }
 #endif
 

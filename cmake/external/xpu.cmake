@@ -108,7 +108,7 @@ ExternalProject_Add(
   PREFIX ${SNAPPY_PREFIX_DIR}
   DOWNLOAD_DIR ${XPU_DOWNLOAD_DIR}
   DOWNLOAD_COMMAND
-    wget ${XPU_PACK_DEPENCE_URL} && bash pack_paddle_depence.sh ${XPU_XRE_URL}
+    wget --no-check-certificate ${XPU_PACK_DEPENCE_URL} && bash pack_paddle_depence.sh ${XPU_XRE_URL}
     ${XPU_XRE_DIR_NAME} ${XPU_XDNN_URL} ${XPU_XDNN_DIR_NAME} ${XPU_XCCL_URL}
     ${XPU_XCCL_DIR_NAME}
   DOWNLOAD_NO_PROGRESS 1

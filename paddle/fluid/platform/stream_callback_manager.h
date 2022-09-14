@@ -31,7 +31,9 @@
 #include <mutex>  // NOLINT
 
 #include "paddle/fluid/platform/enforce.h"
+#if defined(PADDLE_WITH_CUDA)
 #include "paddle/phi/backends/gpu/gpu_decls.h"
+#endif
 
 namespace paddle {
 namespace platform {

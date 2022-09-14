@@ -34,8 +34,11 @@ static void PaddingZeros(const framework::ExecutionContext &ctx,
   // set data
   data->Resize({1, hidden_size});
   data->mutable_data<T>(ctx.GetPlace());
-
+#if defined(PADDLE_WITH_CUDA)
   auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
+#elif defined(PADDLE_WITH_XPU)
+  auto &dev_ctx = ctx.template device_context<phi::XPUContext>();
+#endif
   phi::funcs::set_constant(dev_ctx, data, 0);
 
   // set lod

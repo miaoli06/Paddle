@@ -16,12 +16,17 @@ limitations under the License. */
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/platform/device_memory_aligment.h"
+#if defined(PADDLE_WITH_BOX_PS)
 #if defined(PADDLE_WITH_NCCL)
-#include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#elif defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_XPU)
+#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#include "paddle/fluid/platform/device/xpu/bkcl_helper.h"
 #endif
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
+#include "paddle/fluid/platform/collective_helper.h"
+#endif
 #include "paddle/fluid/operators/tensor_formatter.h"
 namespace paddle {
 namespace operators {
@@ -344,6 +349,88 @@ class CMixAllGatherOpCUDAKernel : public framework::OpKernel<T> {
   }
 };
 
+template <typename T>
+class CMixAllGatherOpXPUKernel : public framework::OpKernel<T> {
+  static const int NCCL_ALLREDUCE = 0;
+  static const int NCCL_MIXALLGATHER = 1;
+  static const int NCCL_ALLGATHER = 2;
+
+ public:
+  void Compute(const framework::ExecutionContext &ctx) const override {
+#if defined(PADDLE_WITH_XPU_BKCL) && defined(PADDLE_WITH_BOX_PS)
+    auto in_tensors = ctx.MultiInput<framework::LoDTensor>("Input");
+    auto fused_tensor = ctx.Output<framework::LoDTensor>("Output");
+
+//    int nranks = ctx.Attr<int>("nranks");
+//    int rank_id = ctx.Attr<int>("rankid");
+    int nccl_mode = ctx.Attr<int>("nccl_mode");
+//    int ring_id = ctx.Attr<int>("ring_id");
+
+    if (nccl_mode == NCCL_ALLGATHER || nccl_mode == NCCL_MIXALLGATHER) {
+      PADDLE_THROW("PaddlePaddle xpu not support gather mode.");
+      return;
+    }
+
+    auto place = ctx.GetPlace();
+
+    int device_id = place.GetDeviceId();
+    auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+
+    box_ptr->DenseNcclTimer(device_id, false, 0x03);
+
+    int64_t numel = 0;
+    BKCLDataType bkcl_dtype =
+            platform::ToBKCLDataType(framework::TransToProtoVarType(in_tensors[0]->dtype()));
+    GetTensorMemSize(in_tensors, &numel);
+
+    auto comm = platform::BKCLCommContext::Instance().Get(0, device_id);
+//    int comm_rank_num = comm->nranks();
+//    int device_num = platform::GetDeviceCount();
+
+    T *recvbuff = fused_tensor->mutable_data<T>({numel, 1}, place);
+
+    auto dev_ctx = paddle::platform::DeviceContextPool::Instance().Get(place);
+    // copy input datas
+    int64_t offset = 0;
+    for (size_t i = 0; i < in_tensors.size(); ++i) {
+      int64_t len = in_tensors[i]->numel();
+      auto sub_tensor = fused_tensor->Slice(offset, offset + len);
+      framework::TensorCopy(*in_tensors[i], place, *dev_ctx, &sub_tensor);
+      offset += len;
+    }
+    box_ptr->DenseNcclTimer(device_id, true, 0x02);
+    XPUStream stream = static_cast<platform::XPUDeviceContext*>(dev_ctx)
+                       ->x_context()
+                       ->xpu_stream;
+    PADDLE_ENFORCE_EQ(
+        bkcl_all_reduce(comm->comm(),
+                        recvbuff,
+                        recvbuff,
+                        numel,
+                        bkcl_dtype,
+                        BKCL_ADD,
+                        stream),
+            BKCL_SUCCESS,
+            platform::errors::PreconditionNotMet("BKCL all reduce failed"));
+    PADDLE_ENFORCE_XPU_SUCCESS(xpu_wait(stream));
+    box_ptr->DenseNcclTimer(device_id, true, 0x01);
+#else
+    PADDLE_THROW("PaddlePaddle should compile with XPU.");
+#endif
+  }
+
+ protected:
+  void GetTensorMemSize(
+      const std::vector<const framework::LoDTensor *> &lod_tensors,
+      int64_t *numel) const {
+    *numel = 0;
+    for (size_t i = 0; i < lod_tensors.size(); ++i) {
+      CHECK(lod_tensors[i]->IsInitialized());
+      *numel += lod_tensors[i]->numel();
+    }
+  }
+};
+
 class CMixAllGatherOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() {
@@ -402,10 +489,19 @@ REGISTER_OP_CPU_KERNEL(c_mixallgather, ops::CMixAllGatherOpCPUKernel<float>,
                        ops::CMixAllGatherOpCPUKernel<int>,
                        ops::CMixAllGatherOpCPUKernel<int64_t>,
                        ops::CMixAllGatherOpCPUKernel<plat::float16>);
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_BOX_PS)
+#if defined(PADDLE_WITH_NCCL)
 REGISTER_OP_CUDA_KERNEL(c_mixallgather, ops::CMixAllGatherOpCUDAKernel<float>,
                         ops::CMixAllGatherOpCUDAKernel<double>,
                         ops::CMixAllGatherOpCUDAKernel<int>,
                         ops::CMixAllGatherOpCUDAKernel<int64_t>,
                         ops::CMixAllGatherOpCUDAKernel<plat::float16>);
+#endif
+#if defined(PADDLE_WITH_XPU_BKCL)
+REGISTER_OP_XPU_KERNEL(c_mixallgather, ops::CMixAllGatherOpXPUKernel<float>,
+                        ops::CMixAllGatherOpXPUKernel<double>,
+                        ops::CMixAllGatherOpXPUKernel<int>,
+                        ops::CMixAllGatherOpXPUKernel<int64_t>,
+                        ops::CMixAllGatherOpXPUKernel<plat::float16>);
+#endif
 #endif

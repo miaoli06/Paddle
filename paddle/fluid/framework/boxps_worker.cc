@@ -20,14 +20,16 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/fluid/framework/trainer_desc.pb.h"
+#include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/device_context.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/lodtensor_printer.h"
 
 #include "paddle/fluid/framework/details/nan_inf_utils.h"
+#if defined(PADDLE_WITH_CUDA)
 #include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#endif
 
 DECLARE_bool(enable_sync_dense_moment);
 DECLARE_bool(check_nan_inf);
@@ -121,8 +123,8 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
       VLOG(0) << "begin to copy global learning rate: " << e;
       const LoDTensor& root_tensor = root_scope.FindVar(e)->Get<LoDTensor>();
       const float* gpu_lr = root_tensor.data<float>();
-      if (platform::is_gpu_place(root_tensor.place())) {
-        cudaMemcpy(&base_lr_, gpu_lr, sizeof(float), cudaMemcpyDeviceToHost);
+      if (platform::is_gpu_place(root_tensor.place()) || platform::is_xpu_place(root_tensor.place())) {
+        SyncCopyD2H(&base_lr_, gpu_lr, 1);
       } else {
         base_lr_ = *gpu_lr;
       }
@@ -301,7 +303,11 @@ static const int DenseDataNormal = 3;
 void BoxPSWorker::Initialize(const TrainerDesc& desc) {
   dev_ctx_ = platform::DeviceContextPool::Instance().Get(place_);
   node_size_ = boxps::MPICluster::Ins().size();
-  device_num_ = platform::GetGPUDeviceCount();
+  device_num_ = GetDeviceCount();
+  if (device_num_ == 0) {
+    device_num_ = desc.thread_num();
+  }
+  VLOG(0) << "boxps_worker init device num: " << device_num_;
 }
 
 void BoxPSWorker::SetDenseTable(BoxPSAsynDenseTable* dense) {
@@ -488,6 +494,7 @@ void BoxPSWorker::CreateDeviceResource(const ProgramDesc& main_prog) {
   }
 }
 void BoxPSWorker::SyncParam(void) {
+#if defined(PADDLE_WITH_CUDA)
   if (param_sync_.numel() == 0 || sync_mode_ == DenseKStepNode && node_size_ == 1) {
     return;
   }
@@ -523,6 +530,7 @@ void BoxPSWorker::SyncParam(void) {
   TensorScaleValue(place_, param_sync_, &param_sync_, scale);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   box_ptr->DenseNcclTimer(device_id_, true, 0x01);
+#endif
 }
 int BoxPSWorker::PackBatchTask(void) {
   device_reader_->AssignFeedVar(*thread_scope_);
@@ -555,7 +563,7 @@ void BoxPSWorker::TrainFiles() {
     device_reader_->Start();
   }
   int step = 0;
-  platform::SetDeviceId(device_id_);
+  SetDeviceID(device_id_);
   while ((batch_size = PackBatchTask()) > 0) {
     VLOG(2) << "[" << device_id_
             << "]begin running ops, batch size:" << batch_size
@@ -577,6 +585,7 @@ void BoxPSWorker::TrainFiles() {
         SyncParam();
       }
     }
+#if defined(PADDLE_WITH_CUDA)
     if (FLAGS_check_nan_inf) {
       // check nan result
       if (framework::details::CheckBatchNanOrInfRet(place_)) {
@@ -584,6 +593,7 @@ void BoxPSWorker::TrainFiles() {
         PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
       }
     }
+#endif
     AddAucMonitor(thread_scope_, place_);
 
     accum_num += batch_size;
@@ -628,7 +638,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
   platform::Timer timeline;
   device_reader_->Start();
 
-  platform::SetDeviceId(device_id_);
+  SetDeviceID(device_id_);
   outer_timer.Start();
   while (true) {
     main_timer.Resume();
@@ -655,7 +665,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
     }
     dev_ctx_->Wait();
     cal_timer.Pause();
-
+#if defined(PADDLE_WITH_CUDA)
     if (FLAGS_check_nan_inf) {
       // check nan result
       if (framework::details::CheckBatchNanOrInfRet(place_)) {
@@ -663,6 +673,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
         PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
       }
     }
+#endif
 
     AddAucMonitor(thread_scope_, place_);
 

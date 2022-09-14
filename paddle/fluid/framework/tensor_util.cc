@@ -1564,7 +1564,7 @@ std::ostream& operator<<(std::ostream& os, const LoD& lod) {
   paddle::string::operator<<(os, lod);
   return os;
 }
-
+#if defined(PADDLE_WITH_CUDA)
 #define CUDA_KERNEL_LOOP(i, n)                                     \
   for (int64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
        i += blockDim.x * gridDim.x)
@@ -1573,9 +1573,11 @@ __global__ void kernel_scale_value(const int64_t len, const float* in,
                                    float* out, const float scale) {
   CUDA_KERNEL_LOOP(i, len) { out[i] = in[i] * scale; }
 }
+#endif
 void TensorScaleValue(const platform::Place& place,
                       const framework::Tensor& tensor, framework::Tensor* out,
                       const float scale) {
+#if defined(PADDLE_WITH_CUDA)
   auto stream = dynamic_cast<phi::GPUContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
@@ -1585,6 +1587,7 @@ void TensorScaleValue(const platform::Place& place,
   const int BLOCK_SIZE_ = 256;
   kernel_scale_value<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0,
                        stream>>>(len, src, dst, scale);
+#endif
 }
 
 }  // namespace framework

@@ -475,7 +475,6 @@ struct UsedSlotGpuType {
   int slot_value_idx;
 };
 
-#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
 struct SlotPvInstanceObject {
   std::vector<SlotRecord> ads;
   ~SlotPvInstanceObject() {
@@ -488,6 +487,7 @@ using SlotPvInstance = SlotPvInstanceObject*;
 inline SlotPvInstance make_slotpv_instance() {
   return new SlotPvInstanceObject();
 }
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
 struct BatchCPUValue {
   std::vector<int> h_uint64_lens;
   std::vector<uint64_t> h_uint64_keys;
@@ -888,7 +888,7 @@ struct BufState {
     return tmp_len != 0;
   }
 };
-
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
 class GraphDataGenerator {
  public:
   GraphDataGenerator(){};
@@ -973,7 +973,7 @@ class GraphDataGenerator {
   std::vector<std::vector<int>> meta_path_;
   bool gpu_graph_training_;
 };
-
+#endif
 class DataFeed {
  public:
   DataFeed() {
@@ -2076,9 +2076,19 @@ class SlotPaddleBoxDataFeed : public DataFeed {
     current_phase_ = current_phase;
   }
   virtual const std::string& GetLineId(int idx) const {
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
     return pack_->get_lineid(idx);
+#else
+    return ins_record_ptr_[idx]->ins_id_;
+#endif
   }
-  virtual int GetCurBatchSize() { return pack_->ins_num(); }
+  virtual int GetCurBatchSize() {
+#if defined(PADDLE_WITH_CUDA)
+    return pack_->ins_num();
+#else
+    return batch_ins_num_;
+#endif
+  }
 
  public:
   int GetBatchSize() { return default_batch_size_; }
@@ -2175,6 +2185,10 @@ class SlotPaddleBoxDataFeed : public DataFeed {
 
 #if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
   MiniBatchGpuPack* pack_ = nullptr;
+#else
+  std::vector<SlotRecord> pv_ins_vec_;
+  const SlotRecord *ins_record_ptr_ = nullptr;
+  int batch_ins_num_ = 0;
 #endif
   int offset_index_ = 0;
   std::vector<std::pair<int, int>> batch_offsets_;

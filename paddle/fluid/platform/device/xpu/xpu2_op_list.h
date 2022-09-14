@@ -547,6 +547,9 @@ XPUOpMap& get_kl2_ops() {
        XPUKernelSet({pOpKernelType(vartype::FP32, XPUPlace())})},
       {"resnet_basic_block",
        XPUKernelSet({pOpKernelType(vartype::FP32, XPUPlace())})},
+      // bkcl
+      {"c_mixallgather",
+       XPUKernelSet({pOpKernelType(vartype::FP32, XPUPlace())})},
   };
 
   return s_xpu2_kernels;

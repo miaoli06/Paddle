@@ -17,6 +17,8 @@
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/trainer.h"
 #include "paddle/fluid/framework/trainer_desc.pb.h"
+#include "paddle/fluid/framework/tensor_util.h"
+
 DECLARE_bool(enable_binding_train_cpu);
 namespace paddle {
 namespace framework {
@@ -47,16 +49,19 @@ void BoxPSTrainer::Initialize(const TrainerDesc& trainer_desc,
   workers_.resize(thread_num_);
   param_need_sync_.reset(new std::vector<std::string>);
 
+  int device_num = GetDeviceCount();
+
   int sync_dense_mode = param_config_.sync_dense_mode();
   int sync_weight_step = param_config_.sync_weight_step();
   bool sync_one_ring = param_config_.sync_one_ring();
   for (int i = 0; i < thread_num_; ++i) {
-    platform::Place place = platform::CUDAPlace(i);
+    int dev_id = (device_num > 0) ? (i % device_num) : i;
+    platform::Place place = GetDeivcePlace(dev_id);
     workers_[i] = DeviceWorkerFactory::CreateDeviceWorker(
         trainer_desc.device_worker_name());
     auto this_worker =
         std::dynamic_pointer_cast<paddle::framework::BoxPSWorker>(workers_[i]);
-    this_worker->SetDeviceIndex(i);
+    this_worker->SetDeviceIndex(dev_id);
     this_worker->SetThreadIndex(i);
     this_worker->SetDataFeed(readers[i]);
     this_worker->SetReaderPlace(place);
