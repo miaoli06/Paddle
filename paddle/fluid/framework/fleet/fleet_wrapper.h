@@ -36,7 +36,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/tensor.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #include "paddle/fluid/platform/macros.h"  // for DISABLE_COPY_AND_ASSIGN
-#ifdef PADDLE_WITH_HETERPS
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_CUDA)
 #include "paddle/fluid/platform/device/gpu/gpu_types.h"
 #endif
 #include "paddle/fluid/framework/fleet/heter_ps/log_patch.h"

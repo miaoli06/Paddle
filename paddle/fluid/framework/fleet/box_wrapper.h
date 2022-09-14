@@ -41,7 +41,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/data_set.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#include "paddle/fluid/framework/tensor_util.h"
 #include "paddle/fluid/platform/monitor.h"
 #include "paddle/fluid/platform/place.h"
 #include "paddle/fluid/platform/timer.h"
@@ -66,7 +66,9 @@ class GpuReplicaCache {
 
   ~GpuReplicaCache() {
     for (size_t i = 0; i < d_embs_.size(); ++i) {
+#if defined(PADDLE_WITH_CUDA)
       cudaFree(d_embs_[i]);
+#endif
     }
   }
   int AddItems(const std::vector<float>& emb) {
@@ -80,9 +82,10 @@ class GpuReplicaCache {
   }
 
   void ToHBM() {
-    int gpu_num = platform::GetGPUDeviceCount();
+    int gpu_num = GetDeviceCount();
     for (int i = 0; i < gpu_num; ++i) {
       d_embs_.push_back(NULL);
+#if defined(PADDLE_WITH_CUDA)
       cudaSetDevice(i);
       cudaMalloc(&d_embs_.back(), h_emb_count_ * emb_dim_ * sizeof(float));
       auto place = platform::CUDAPlace(i);
@@ -92,10 +95,18 @@ class GpuReplicaCache {
       cudaMemcpyAsync(d_embs_.back(), h_emb_.data(),
                       h_emb_count_ * emb_dim_ * sizeof(float),
                       cudaMemcpyHostToDevice, stream);
+#else
+      PADDLE_THROW(phi::errors::Unimplemented("not supported platform."));
+#endif
     }
   }
-
+#if defined(PADDLE_WITH_CUDA)
   void PullCacheValue(uint64_t* d_keys, float* d_vals, int num, int gpu_id);
+#else
+  void PullCacheValue(uint64_t* d_keys, float* d_vals, int num, int gpu_id) {
+    PADDLE_THROW(phi::errors::Unimplemented("not supported platform."));
+  }
+#endif
   int emb_dim_ = 0;
   std::vector<float*> d_embs_;
   double GpuMemUsed(void) {
@@ -141,15 +152,22 @@ class InputTable {
     std::vector<float> d_values;
     d_keys.resize(num);
     d_values.resize(num * dim_);
-
+#if defined(PADDLE_WITH_CUDA)
     cudaSetDevice(device_id);
     cudaMemcpy(d_keys.data(), keys, d_keys.size() * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);
+#else
+    PADDLE_THROW(phi::errors::Unimplemented("not supported platform."));
+#endif
     for (size_t i = 0; i < num; ++i) {
       memcpy(&d_values[i * dim_], &table_[d_keys[i]], dim_ * sizeof(float));
     }
+#if defined(PADDLE_WITH_CUDA)
     cudaMemcpy(values, d_values.data(), d_values.size() * sizeof(float),
                cudaMemcpyHostToDevice);
+#else
+    PADDLE_THROW(phi::errors::Unimplemented("not supported platform."));
+#endif
   }
 
   size_t size() const { return key_offset_.size(); }
@@ -267,7 +285,7 @@ class MetricMsg {
     auto* gpu_data = gpu_tensor.data<T>();
     auto len = gpu_tensor.numel();
     data->resize(len);
-    cudaMemcpy(data->data(), gpu_data, sizeof(T) * len, cudaMemcpyDeviceToHost);
+    SyncCopyD2H(data->data(), gpu_data, len);
   }
   static inline std::pair<int, int> parse_cmatch_rank(uint64_t x) {
     // first 32 bit store cmatch and second 32 bit store rank
@@ -506,7 +524,7 @@ class BoxWrapper {
       s_instance_->expand_embed_dim_ = expand_embed_dim;
       s_instance_->feature_type_ = feature_type;
       s_instance_->pull_embedx_scale_ = pull_embedx_scale;
-      s_instance_->gpu_num_ = platform::GetGPUDeviceCount();
+      s_instance_->gpu_num_ = GetDeviceCount();
       // get feature offset info
       s_instance_->GetFeatureOffsetInfo();
 
@@ -633,6 +651,9 @@ class BoxWrapper {
     if (platform::is_gpu_place(place)) {
       return place.GetDeviceId();
     }
+    if (platform::is_xpu_place(place)) {
+      return place.GetDeviceId();
+    }
     thread_local int device_id = -1;
     static std::atomic<int> dev_id{0};
     if (device_id < 0) {
@@ -680,7 +701,7 @@ class BoxWrapper {
   DeviceBoxData* device_caches_ = nullptr;
   std::map<std::string, float> lr_map_;
   size_t input_table_dim_ = 0;
-  int gpu_num_ = platform::GetGPUDeviceCount();
+  int gpu_num_ = GetDeviceCount();
 
  public:
   static std::shared_ptr<boxps::PaddleShuffler> data_shuffle_;

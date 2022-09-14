@@ -18,7 +18,6 @@ limitations under the License. */
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/tensor.h"
-#include "paddle/fluid/framework/fleet/box_wrapper.h"
 
 namespace paddle {
 namespace operators {

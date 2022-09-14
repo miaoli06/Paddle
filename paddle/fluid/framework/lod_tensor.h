@@ -189,7 +189,7 @@ void SerializeToStream(std::ostream& os, const LoDTensor& tensor);
 
 void DeserializeFromStream(std::istream& os, LoDTensor* tensor);
 
-
+#if defined(PADDLE_WITH_CUDA)
 class GPULodVector {
 public:
     GPULodVector() : holder_(nullptr) {}
@@ -219,6 +219,7 @@ public:
 private:
     std::shared_ptr<memory::Allocation> holder_;
 };
+#endif
 
 }  // namespace framework
 }  // namespace paddle

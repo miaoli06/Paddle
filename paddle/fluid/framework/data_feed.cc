@@ -283,7 +283,7 @@ void DataFeed::CopyToFeedTensor(void* dst, const void* src, size_t size) {
     cudaMemcpy(dst, src, size, cudaMemcpyHostToDevice);
 #elif defined(PADDLE_WITH_HIP)
     hipMemcpy(dst, src, size, hipMemcpyHostToDevice);
-#elif defined(PADDLE_WITH_XPU_KP)
+#elif defined(PADDLE_WITH_XPU_KP) || defined(PADDLE_WITH_XPU)
     xpu_memcpy(dst, src, size, XPUMemcpyKind::XPU_HOST_TO_DEVICE);
 #else
     PADDLE_THROW(platform::errors::Unimplemented(
@@ -3164,11 +3164,13 @@ int SlotPaddleBoxDataFeed::Next() {
     this->batch_size_ = batch.second;
     batch_timer_.Resume();
     PutToFeedSlotVec(&records_[batch.first], this->batch_size_);
+#if defined(PADDLE_WITH_CUDA) && defined(_LINUX)
     // update set join q value
     if (FLAGS_padbox_slotrecord_extend_dim > 0) {
       // pcoc
       pack_->pack_qvalue();
     }
+#endif
     batch_timer_.Pause();
     return this->batch_size_;
   }
@@ -3210,16 +3212,16 @@ void SlotPaddleBoxDataFeed::PutToFeedPvVec(const SlotPvInstance* pvs, int num) {
   BuildSlotBatchGPU(ins_num);
 #else
   int ins_number = 0;
-  std::vector<SlotRecord> ins_vec;
+  pv_ins_vec_.clear();
   for (int i = 0; i < num; ++i) {
     auto& pv = pvs[i];
     ins_number += pv->ads.size();
     for (auto ins : pv->ads) {
-      ins_vec.push_back(ins);
+      pv_ins_vec_.push_back(ins);
     }
   }
   GetRankOffset(pvs, num, ins_number);
-  PutToFeedSlotVec(&ins_vec[0], ins_number);
+  PutToFeedSlotVec(&pv_ins_vec_[0], ins_number);
 #endif
 }
 
@@ -3292,6 +3294,8 @@ void SlotPaddleBoxDataFeed::PutToFeedSlotVec(const SlotRecord* ins_vec,
   pack_->pack_instance(ins_vec, num);
   BuildSlotBatchGPU(pack_->ins_num());
 #else
+  batch_ins_num_ = num;
+  ins_record_ptr_ = ins_vec;
   for (int j = 0; j < use_slot_size_; ++j) {
     auto& feed = feed_vec_[j];
     if (feed == nullptr) {
@@ -3357,7 +3361,7 @@ void SlotPaddleBoxDataFeed::PutToFeedSlotVec(const SlotRecord* ins_vec,
         info.local_shape[info.inductive_shape_index] =
             total_instance / info.total_dims_without_inductive;
       }
-      feed->Resize(framework::make_ddim(info.local_shape));
+      feed->Resize(phi::make_ddim(info.local_shape));
     } else {
       LoD data_lod{slot_offset};
       feed_vec_[j]->set_lod(data_lod);

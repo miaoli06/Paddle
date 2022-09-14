@@ -35,6 +35,11 @@ limitations under the License. */
 #endif
 
 #include "paddle/phi/core/dense_tensor.h"
+#if defined(PADDLE_WITH_CUDA)
+#include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#elif defined(PADDLE_WITH_XPU)
+#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#endif
 
 namespace paddle {
 namespace framework {
@@ -582,6 +587,51 @@ std::ostream& operator<<(std::ostream& os, const LoD& lod);
 void TensorScaleValue(const platform::Place& place,
                       const framework::Tensor& tensor, framework::Tensor* out,
                       const float scale);
+// get device count
+inline int GetDeviceCount(void) {
+#if defined(PADDLE_WITH_CUDA)
+  return platform::GetGPUDeviceCount();
+#elif defined(PADDLE_WITH_XPU)
+  return platform::GetXPUDeviceCount();
+#endif
+  return 0;
+}
+inline void SetDeviceID(int dev_id) {
+#if defined(PADDLE_WITH_CUDA)
+  phi::backends::gpu::SetDeviceId(dev_id);
+#elif defined(PADDLE_WITH_XPU)
+  phi::backends::xpu::SetXPUDeviceId(dev_id);
+#endif
+}
+template<typename T>
+inline void SyncCopyH2D(T *dest, const T *src, const size_t len) {
+#if defined(PADDLE_WITH_CUDA)
+  cudaMemcpy(src, dest, sizeof(T) * len, cudaMemcpyHostToDevice);
+#elif defined(PADDLE_WITH_XPU)
+  xpu_memcpy(dest, src, sizeof(T) * len, XPUMemcpyKind::XPU_HOST_TO_DEVICE);
+#else
+  PADDLE_THROW(phi::errors::Unimplemented("not supported platform."));
+#endif
+}
+template<typename T>
+inline void SyncCopyD2H(T *dest, const T *src, const size_t len) {
+#if defined(PADDLE_WITH_CUDA)
+  cudaMemcpy(src, dest, sizeof(T) * len, cudaMemcpyDeviceToHost);
+#elif defined(PADDLE_WITH_XPU)
+  xpu_memcpy(dest, src, sizeof(T) * len, XPUMemcpyKind::XPU_DEVICE_TO_HOST);
+#else
+  PADDLE_THROW(phi::errors::Unimplemented("not supported platform."));
+#endif
+}
+inline platform::Place GetDeivcePlace(int dev_id) {
+#if defined(PADDLE_WITH_CUDA)
+    return platform::CUDAPlace(dev_id);
+#elif defined(PADDLE_WITH_XPU)
+    return platform::XPUPlace(dev_id);
+#else
+    return platform::CPUPlace();
+#endif
+}
 
 }  // namespace framework
 }  // namespace paddle

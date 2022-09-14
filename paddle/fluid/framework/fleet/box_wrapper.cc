@@ -20,8 +20,10 @@
 #include <numeric>
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/memory/allocation/allocator_facade.h"
+#if defined(PADDLE_WITH_CUDA)
 #include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#endif
 
 DECLARE_bool(use_gpu_replica_cache);
 DECLARE_int32(gpu_replica_cache_dim);
@@ -125,6 +127,7 @@ void BoxWrapper::EndPass(bool need_save_delta) {
   int ret = boxps_ptr_->EndPass(need_save_delta);
   PADDLE_ENFORCE_EQ(
       ret, 0, platform::errors::PreconditionNotMet("EndPass failed in BoxPS."));
+#if defined(PADDLE_WITH_CUDA)
   // clear all gpu memory
   if (FLAGS_enable_force_hbm_recyle) {
     for (int i = 0; i < gpu_num_; ++i) {
@@ -137,6 +140,7 @@ void BoxWrapper::EndPass(bool need_save_delta) {
     VLOG(0) << "release gpu memory total: " << (total >> 20)
             << "MB, available: " << (available >> 20) << "MB";
   }
+#endif
 }
 
 void BoxWrapper::RecordReplace(std::vector<SlotRecord>* records,
@@ -747,6 +751,7 @@ const std::vector<double> BoxWrapper::GetMetricMsg(const std::string& name) {
 }
 void BoxWrapper::PrintSyncTimer(int device, double train_span) {
   auto& dev = device_caches_[device];
+#if defined(PADDLE_WITH_CUDA)
   size_t total = 0;
   size_t available = 0;
   size_t used = memory::allocation::AllocatorFacade::Instance().GetTotalMemInfo(
@@ -764,6 +769,29 @@ void BoxWrapper::PrintSyncTimer(int device, double train_span) {
                << ", total cache:" << (total >> 20) << "MB"
                << ", used:" << (used >> 20) << "MB"
                << ", free:" << (available >> 20) << "MB";
+#elif defined(PADDLE_WITH_XPU)
+  LOG(WARNING) << "xpu: " << device << ", phase: " << phase_
+               << ", train dnn: " << train_span
+               << ", sparse pull span: " << dev.all_pull_timer.ElapsedSec()
+               << ", dedup span: " << dev.pull_dedup_timer.ElapsedSec()
+               << ", boxps span: " << dev.boxps_pull_timer.ElapsedSec()
+               << ", push span: " << dev.all_push_timer.ElapsedSec()
+               << ", boxps span:" << dev.boxps_push_timer.ElapsedSec()
+               << ", dense nccl:" << dev.dense_nccl_timer.ElapsedSec()
+               << ", sync stream:" << dev.dense_sync_timer.ElapsedSec()
+               << ", wrapper xpu memory:" << dev.GpuMemUsed() << "MB";
+#else
+  LOG(WARNING) << "cpu: " << device << ", phase: " << phase_
+               << ", train dnn: " << train_span
+               << ", sparse pull span: " << dev.all_pull_timer.ElapsedSec()
+               << ", dedup span: " << dev.pull_dedup_timer.ElapsedSec()
+               << ", boxps span: " << dev.boxps_pull_timer.ElapsedSec()
+               << ", push span: " << dev.all_push_timer.ElapsedSec()
+               << ", boxps span:" << dev.boxps_push_timer.ElapsedSec()
+               << ", dense nccl:" << dev.dense_nccl_timer.ElapsedSec()
+               << ", sync stream:" << dev.dense_sync_timer.ElapsedSec()
+               << ", wrapper cpu memory:" << dev.GpuMemUsed() << "MB";
+#endif
   dev.ResetTimer();
 }
 // get feature offset info
@@ -832,14 +860,16 @@ void BoxWrapper::InitializeGPUAndLoadModel(
   if (nullptr != s_instance_) {
     VLOG(3) << "Begin InitializeGPU";
     std::vector<cudaStream_t*> stream_list;
-    gpu_num_ = platform::GetGPUDeviceCount();
+    gpu_num_ = GetDeviceCount();
     CHECK(gpu_num_ <= MAX_GPU_NUM) << "gpu card num: " << gpu_num_
                                    << ", more than max num: " << MAX_GPU_NUM;
     for (int i = 0; i < gpu_num_; ++i) {
       VLOG(3) << "before get context i[" << i << "]";
+#if defined(PADDLE_WITH_CUDA)
       stream_list_[i] = dynamic_cast<phi::GPUContext*>(
               platform::DeviceContextPool::Instance().Get(platform::CUDAPlace(i)))
               ->stream();
+#endif
       stream_list.push_back(&stream_list_[i]);
     }
     VLOG(2) << "Begin call InitializeGPU in BoxPS";

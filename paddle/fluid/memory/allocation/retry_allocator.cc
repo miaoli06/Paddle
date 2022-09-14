@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #include "paddle/fluid/memory/allocation/retry_allocator.h"
-
+#include <math.h>
 #include "glog/logging.h"
 
 PADDLE_DEFINE_EXPORTED_int32(sample_max_bin_bytes, 2048, "sample max bytes in pool MB");

@@ -21,7 +21,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/framework/tensor.h"
+#if defined(PADDLE_WITH_CUDA)
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
+#endif
 
 namespace paddle {
 namespace operators {
@@ -35,7 +37,7 @@ template <typename T>
 class StoreQValueOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-#ifdef PADDLE_WITH_BOX_PS
+#if defined(PADDLE_WITH_BOX_PS) && defined(PADDLE_WITH_CUDA)
     auto inputs =
         ctx.MultiInput<LoDTensor>("Ids");  // std::vector<const Tensor*>
     auto ctx_place = ctx.GetPlace();

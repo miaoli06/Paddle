@@ -1743,7 +1743,7 @@ void OperatorWithKernel::RunImpl(const Scope& scope,
   }
 
   if (FLAGS_check_nan_inf) {
-//    framework::details::CheckOpHasNanOrInf(*this, exec_scope, place);
+#if defined(PADDLE_WITH_CUDA)
     if (framework::details::CheckOpHasNanOrInfRet(*this, exec_scope, place)) {
       framework::details::DumpAllScope(exec_scope, place);
       // dump current op data
@@ -1776,6 +1776,9 @@ void OperatorWithKernel::RunImpl(const Scope& scope,
       PADDLE_ENFORCE(false, "ERROR: check INF and NAN: %s",
                      DebugStringEx(&exec_scope).c_str());
     }
+#else
+    framework::details::CheckOpHasNanOrInf(*this, exec_scope, place);
+#endif
   }
 
   // To solve issue #15032, have a discussion with @Luotao for cpu inference,
