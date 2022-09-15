@@ -625,11 +625,11 @@ inline void SyncCopyD2H(T *dest, const T *src, const size_t len) {
 }
 inline platform::Place GetDeivcePlace(int dev_id) {
 #if defined(PADDLE_WITH_CUDA)
-    return platform::CUDAPlace(dev_id);
+  return platform::CUDAPlace(dev_id);
 #elif defined(PADDLE_WITH_XPU)
-    return platform::XPUPlace(dev_id);
+  return platform::XPUPlace(dev_id);
 #else
-    return platform::CPUPlace();
+  return platform::CPUPlace();
 #endif
 }
 
