@@ -188,9 +188,6 @@ __global__ void FusedCVMKernelWithCVM(const size_t N, T **output_values,
       *out = log(in[0] + 1);
     } else if (offset == 1) { // ctr = log(click + 1) - log(show + 1)
       *out = log(in[1] + 1) - log(in[0] + 1);
-      if (isnan(*out) || isinf(*out)) {
-        printf("slot id %d, ins id %d, data: %f, show: %f, click: %f\n", x, y, *out, in[0], in[1]);
-      }
     } else {
       *out = in[offset];
     }
