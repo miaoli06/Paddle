@@ -712,8 +712,8 @@ void CheckVarHasNanOrInfRet(const std::string& op_type,
     }
     return;
   }
-  unsigned int* dnum = get_device_num_ptr(place);
 #if defined(PADDLE_WITH_CUDA)
+  unsigned int* dnum = get_device_num_ptr(place);
   CudaTensorCheckNanInf(*tensor, dnum);
 #endif
 }

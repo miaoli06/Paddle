@@ -10,7 +10,7 @@ set(XPU_RT_LIB_NAME "libxpurt.so")
 if(NOT DEFINED XPU_BASE_URL)
   set(XPU_BASE_URL_WITHOUT_DATE
       "https://baidu-kunlun-product.cdn.bcebos.com/KL-SDK/klsdk-dev")
-  set(XPU_BASE_URL "${XPU_BASE_URL_WITHOUT_DATE}/20220728")
+  set(XPU_BASE_URL "${XPU_BASE_URL_WITHOUT_DATE}/20220919")
 else()
   set(XPU_BASE_URL "${XPU_BASE_URL}")
 endif()
@@ -19,7 +19,7 @@ endif()
 if(NOT DEFINED XPU_XDNN_BASE_URL)
   set(XPU_XDNN_BASE_URL_WITHOUT_DATE
       "https://klx-sdk-release-public.su.bcebos.com/xdnn/dev")
-  set(XPU_XDNN_BASE_URL "${XPU_XDNN_BASE_URL_WITHOUT_DATE}/20220728")
+  set(XPU_XDNN_BASE_URL "${XPU_XDNN_BASE_URL_WITHOUT_DATE}/20220919")
 else()
   set(XPU_XDNN_BASE_URL "${XPU_XDNN_BASE_URL}")
 endif()
@@ -82,7 +82,8 @@ set(XPU_XCCL_URL
     "${XPU_XCCL_BASE_URL}/${XPU_XCCL_DIR_NAME}.tar.gz"
     CACHE STRING "" FORCE)
 set(XPU_PACK_DEPENCE_URL
-    "https://baidu-kunlun-public.su.bcebos.com/paddle_depence/pack_paddle_depence.sh"
+    #"https://baidu-kunlun-public.su.bcebos.com/paddle_depence/pack_paddle_depence.sh"
+    "data-im.baidu.com:/home/work/var/CI_DATA/im/static/pack_paddle_depence.sh/pack_paddle_depence.sh"
     CACHE STRING "" FORCE)
 
 set(SNAPPY_PREFIX_DIR "${THIRD_PARTY_PATH}/xpu")
@@ -108,7 +109,7 @@ ExternalProject_Add(
   PREFIX ${SNAPPY_PREFIX_DIR}
   DOWNLOAD_DIR ${XPU_DOWNLOAD_DIR}
   DOWNLOAD_COMMAND
-    wget --no-check-certificate ${XPU_PACK_DEPENCE_URL} && bash pack_paddle_depence.sh ${XPU_XRE_URL}
+    wget --no-check-certificate ${XPU_PACK_DEPENCE_URL} -O pack_paddle_depence.sh && bash pack_paddle_depence.sh ${XPU_XRE_URL}
     ${XPU_XRE_DIR_NAME} ${XPU_XDNN_URL} ${XPU_XDNN_DIR_NAME} ${XPU_XCCL_URL}
     ${XPU_XCCL_DIR_NAME}
   DOWNLOAD_NO_PROGRESS 1

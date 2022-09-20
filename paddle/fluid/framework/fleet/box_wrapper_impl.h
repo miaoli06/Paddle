@@ -26,8 +26,8 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                                 const std::vector<float*>& values,
                                 const std::vector<int64_t>& slot_lengths,
                                 const int hidden_size,
-                                   const int expand_embed_dim,
-                                   const int skip_offset, bool expand_only) {
+                                const int expand_embed_dim,
+                                const int skip_offset, bool expand_only) {
 #if defined(PADDLE_WITH_CUDA)
   //  VLOG(3) << "Begin PullSparse";
   int device_id = place.GetDeviceId();
@@ -174,12 +174,12 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
 }
 
 void BoxWrapper::PullSparseCaseCPU(const paddle::platform::Place& place,
-    const std::vector<const uint64_t*>& keys,
-                                   const std::vector<float*>& values,
-    const std::vector<int64_t>& slot_lengths,
-    const int hidden_size,
-    const int expand_embed_dim,
-                                   const int skip_offset, bool expand_only) {
+                                    const std::vector<const uint64_t*>& keys,
+                                    const std::vector<float*>& values,
+                                    const std::vector<int64_t>& slot_lengths,
+                                    const int hidden_size,
+                                    const int expand_embed_dim,
+                                    const int skip_offset, bool expand_only) {
   //  VLOG(3) << "Begin PullSparse";
   int device_id = GetPlaceDeviceId(place);
   DeviceBoxData& dev = device_caches_[device_id];
