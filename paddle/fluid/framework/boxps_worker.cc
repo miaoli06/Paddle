@@ -307,7 +307,7 @@ void BoxPSWorker::Initialize(const TrainerDesc& desc) {
   if (device_num_ == 0) {
     device_num_ = desc.thread_num();
   }
-  VLOG(0) << "boxps_worker init device num: " << device_num_;
+  VLOG(1) << "boxps_worker init device num: " << device_num_;
 }
 
 void BoxPSWorker::SetDenseTable(BoxPSAsynDenseTable* dense) {
@@ -590,7 +590,7 @@ void BoxPSWorker::TrainFiles() {
       // check nan result
       if (framework::details::CheckBatchNanOrInfRet(place_)) {
         framework::details::DumpAllScope(*thread_scope_, place_);
-        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
+        PADDLE_ENFORCE(false, "ERROR: check INF and NAN, device id=%d, batch id=%d", device_id_, step);
       }
     }
 #endif
@@ -670,7 +670,7 @@ void BoxPSWorker::TrainFilesWithProfiler() {
       // check nan result
       if (framework::details::CheckBatchNanOrInfRet(place_)) {
         framework::details::DumpAllScope(*thread_scope_, place_);
-        PADDLE_ENFORCE(false, "ERROR: check INF and NAN");
+        PADDLE_ENFORCE(false, "ERROR: check INF and NAN, device id=%d, batch id=%d", device_id_, step_cnt);
       }
     }
 #endif

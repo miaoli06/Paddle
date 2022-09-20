@@ -31,21 +31,21 @@ template <typename T>
 static void PaddingZeros(const framework::ExecutionContext &ctx,
                          framework::LoDTensor *data, int batch_size,
                          int hidden_size) {
+  auto place = ctx.GetPlace();
   // set data
   data->Resize({1, hidden_size});
-  data->mutable_data<T>(ctx.GetPlace());
-#if defined(PADDLE_WITH_CUDA)
-  auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
-#elif defined(PADDLE_WITH_XPU)
-  auto &dev_ctx = ctx.template device_context<phi::XPUContext>();
-#endif
-  phi::funcs::set_constant(dev_ctx, data, 0);
-
+  T *value_ptr = data->mutable_data<T>(place);
+  if (platform::is_cpu_place(place)) {
+    memset(value_ptr, 0, sizeof(T) * hidden_size);
+  } else {
+    auto &dev_ctx = ctx.template device_context<phi::DeviceContext>();
+    phi::funcs::set_constant(dev_ctx, data, 0);
+  }
   // set lod
-  std::vector<size_t> v_lod(batch_size + 1, 1);
-  v_lod[0] = 0;
-  paddle::framework::LoD data_lod;
-  data_lod.push_back(v_lod);
+  thread_local paddle::framework::LoD data_lod;
+  data_lod.resize(1);
+  data_lod[0].resize(batch_size + 1, 1);
+  data_lod[0][0] = 0;
   data->set_lod(data_lod);
 }
 

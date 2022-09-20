@@ -46,50 +46,53 @@ inline void FeaturePullCopyData(
     const boxps::FeaturePullOffset& info, const size_t& pull_size_float,
     const std::vector<const uint64_t*>& slot_keys,
     const std::vector<float*>& dest, const float* src, const int hidden_size,
-    const int embedx_dim, const int total_length, int* total_dims,
+    const uint32_t &embedx_dim, const int total_length, const int dedup_len, int* total_dims,
     const int64_t* slot_lens, const int slot_num, const int* key2slot,
     const float scale, const int cvm_offset, const uint32_t* restore_idx,
     const int skip_offset) {
-  parallel_run_range(total_length, [&](int tid, size_t start_pos,
-                                       size_t end_pos) {
+  parallel_run_range(total_length, [&](
+      int tid, size_t start_pos, size_t end_pos) {
     for (size_t i = start_pos; i < end_pos; ++i) {
+//    for (int i = 0; i < total_length; ++i) {
       int x = key2slot[i];
       int y = i - slot_lens[x];
-
-      const float* src_val = &src[restore_idx[i] * pull_size_float];
+      const uint32_t &src_id = restore_idx[i];
+      CHECK(src_id < static_cast<uint32_t>(dedup_len))
+          << "i=" << i << ", dedup_len=" << dedup_len << ", src_id=" << src_id;
+      const float* src_val = &src[src_id * pull_size_float];
       float* dest_ptr = dest[x] + y * hidden_size;
       const float* src_ptr =
           reinterpret_cast<const float*>(&src_val[info.show]);
       for (int k = 0; k < cvm_offset; ++k) {
         dest_ptr[k] = src_ptr[k + skip_offset];
       }
-      const int embedx_size =
-          *reinterpret_cast<const int*>(&src_val[info.embedx_size]);
+      const uint32_t embedx_size =
+          *reinterpret_cast<const uint32_t*>(&src_val[info.embedx_size]);
       total_dims[i] = static_cast<int>(embedx_size > 0);
-      if (embedx_size == 0) {
+      dest_ptr = dest_ptr + cvm_offset;
+      if (embedx_size == 0 || embedx_size > embedx_dim) {
+        for (uint32_t col = 0; col < embedx_dim; ++col) {
+          dest_ptr[col] = 0;
+        }
         continue;
       }
 
-      dest_ptr = dest_ptr + cvm_offset;
       src_ptr = &src_val[info.embedx];
       if (info.is_quant) {
         const int16_t* embedx_ptr = reinterpret_cast<const int16_t*>(src_ptr);
         // copy embedx
-        for (int col = 0; col < embedx_dim; ++col) {
-          if (embedx_size > 0) {
-            dest_ptr[col] = embedx_ptr[col] * scale;
-          } else {
-            dest_ptr[col] = 0;
-          }
+        for (uint32_t col = 0; col < embedx_size; ++col) {
+          dest_ptr[col] = embedx_ptr[col] * scale;
         }
       } else {
         // copy embedx
-        for (int col = 0; col < embedx_dim; ++col) {
-          if (embedx_size > 0) {
-            dest_ptr[col] = src_ptr[col];
-          } else {
-            dest_ptr[col] = 0;
-          }
+        for (uint32_t col = 0; col < embedx_size; ++col) {
+          dest_ptr[col] = src_ptr[col];
+        }
+      }
+      if (embedx_size < embedx_dim) {
+        for (uint32_t col = embedx_size; col < embedx_dim; ++col) {
+          dest_ptr[col] = 0;
         }
       }
     }  // end kernel loop
@@ -106,11 +109,13 @@ void BoxWrapper::CopyForPullCPU(const paddle::platform::Place& place,
                                 const int64_t total_length, int* total_dims,
                                 const int skip_offset, bool expand_only,
                                 const uint32_t* restore_idx) {
+  int device_id = GetPlaceDeviceId(place);
+  int dedup_len = device_caches_[device_id].dedup_key_length;
   const int cvm_offset = cvm_offset_ - skip_offset;
   float* pull_values_gpu = reinterpret_cast<float*>(total_values_gpu);
   FeaturePullCopyData(pull_info_, pull_float_num_, slot_keys, slot_values,
                       pull_values_gpu, hidden_size, embedx_dim_, total_length,
-                      total_dims, slot_lens, slot_num, key2slot,
+                      dedup_len, total_dims, slot_lens, slot_num, key2slot,
                       pull_embedx_scale_, cvm_offset, restore_idx, skip_offset);
 }
 inline void PushMergeCopyData(
@@ -121,8 +126,10 @@ inline void PushMergeCopyData(
     const int slot_num, const int* key2slot, const int cvm_offset,
     const uint32_t* d_sort_idx, const uint32_t* d_sort_offset,
     const uint32_t* d_sort_cnt, const int skip_offset) {
-  parallel_run_range(total_len, [&](int tid, size_t start_pos, size_t end_pos) {
+  parallel_run_range(total_len, [&](
+      int tid, size_t start_pos, size_t end_pos) {
     for (size_t i = start_pos; i < end_pos; ++i) {
+//    for (int i = 0; i < total_len; ++i) {
       const uint32_t& start = d_sort_offset[i];
       const uint32_t& count = d_sort_cnt[i];
       const uint32_t& pos = d_sort_idx[start];

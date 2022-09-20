@@ -647,11 +647,48 @@ void CheckOpHasNanOrInf(const framework::OperatorBase& op,
     }
   }
 }
+inline unsigned int& get_cpu_nan_inf_num(void) {
+  thread_local unsigned int nan_inf_num = 0;
+  return nan_inf_num;
+}
+static unsigned int* get_device_num_ptr(const platform::Place& place) {
+#ifdef PADDLE_WITH_CUDA
+  thread_local paddle::memory::AllocationPtr gpu_tensor = nullptr;
+  if (gpu_tensor == nullptr) {
+    auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
+          platform::DeviceContextPool::Instance().Get(place));
+    gpu_tensor = paddle::memory::Alloc(*dev_ctx, sizeof(unsigned int));
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemsetAsync(
+        gpu_tensor->ptr(), 0, sizeof(unsigned int), dev_ctx->stream()));
+  }
+  return reinterpret_cast<unsigned int*>(gpu_tensor->ptr());
+#else
+  PADDLE_THROW(platform::errors::Unimplemented("get_device_num_ptr not support."));
+  return nullptr;
+#endif
+}
+template <typename T>
+static int CheckNanInfRet(const T* value,
+                        const size_t numel) {
+  T sum = static_cast<T>(0.0);
+#if defined _OPENMP && _OPENMP >= 201307
+#pragma omp parallel for simd reduction(+ : sum)
+#elif defined _OPENMP
+#pragma omp parallel for reduction(+ : sum)
+#endif
+  for (size_t i = 0; i < numel; ++i) {
+    sum += (value[i] - value[i]);
+  }
+
+  if (std::isnan(sum) || std::isinf(sum)) {
+    return 1;
+  }
+  return 0;
+}
 void CheckVarHasNanOrInfRet(const std::string& op_type,
                             const framework::Variable* var,
                             const std::string& var_name,
-
-                            const platform::Place& place, unsigned int* dnum) {
+                            const platform::Place& place) {
   const Tensor* tensor{nullptr};
   if (var->IsType<framework::LoDTensor>()) {
     tensor = &var->Get<framework::LoDTensor>();
@@ -664,29 +701,26 @@ void CheckVarHasNanOrInfRet(const std::string& op_type,
     return;
   }
   if (!platform::is_gpu_place(tensor->place())) {
-    tensor_check<phi::CPUContext>(op_type, var_name, *tensor, place);
+    int64_t numel = tensor->numel();
+    auto dtype = framework::TransToProtoVarType(tensor->type());
+    if (dtype == proto::VarType::FP32) {
+      const float *val = tensor->data<float>();
+      get_cpu_nan_inf_num() += CheckNanInfRet(val, numel);
+    } else if (dtype == proto::VarType::FP64) {
+      const double *val = tensor->data<double>();
+      get_cpu_nan_inf_num() += CheckNanInfRet(val, numel);
+    }
     return;
   }
+  unsigned int* dnum = get_device_num_ptr(place);
 #if defined(PADDLE_WITH_CUDA)
   CudaTensorCheckNanInf(*tensor, dnum);
 #endif
 }
-static unsigned int* get_device_num_ptr(const platform::Place& place) {
-  unsigned int* num_ptr = nullptr;
-#ifdef PADDLE_WITH_CUDA
-  thread_local paddle::memory::AllocationPtr gpu_tensor = nullptr;
-  auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
-      platform::DeviceContextPool::Instance().Get(place));
-  if (gpu_tensor == nullptr) {
-    gpu_tensor = paddle::memory::Alloc(*dev_ctx, sizeof(unsigned int));
-    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemsetAsync(
-        gpu_tensor->ptr(), 0, sizeof(unsigned int), dev_ctx->stream()));
-  }
-  num_ptr = reinterpret_cast<unsigned int*>(gpu_tensor->ptr());
-#endif
-  return num_ptr;
-}
 bool CheckBatchNanOrInfRet(const platform::Place& place) {
+  if (!platform::is_gpu_place(place)) {
+    return (get_cpu_nan_inf_num() > 0);
+  }
 #ifdef PADDLE_WITH_CUDA
   auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
       platform::DeviceContextPool::Instance().Get(place));
@@ -697,7 +731,7 @@ bool CheckBatchNanOrInfRet(const platform::Place& place) {
                                               sizeof(unsigned int),
                                               cudaMemcpyDeviceToHost, stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-  if (nan_inf_num > 0) {
+  if ((nan_inf_num + get_cpu_nan_inf_num()) > 0) {
     return true;
   }
 #endif
@@ -709,13 +743,12 @@ bool CheckOpHasNanOrInfRet(const framework::OperatorBase& op,
   std::call_once(white_list_init_flag, InitWhiteListFormEnv);
 
   if (IsSkipOp(op)) return false;
-  unsigned int* num_ptr = get_device_num_ptr(place);
   if (op_var_nan_inf_white_list().count(op.Type()) == 0) {
     // NOTE. vname may destruct in the end of this func.
     for (auto& vname : op.OutputVars(true)) {
       auto* var = exec_scope.FindVar(vname);
       if (var == nullptr) continue;
-      CheckVarHasNanOrInfRet(op.Type(), var, vname, place, num_ptr);
+      CheckVarHasNanOrInfRet(op.Type(), var, vname, place);
     }
   } else {
     for (auto& vname : op.OutputVars(true)) {
@@ -729,7 +762,7 @@ bool CheckOpHasNanOrInfRet(const framework::OperatorBase& op,
       if (!need_check) continue;
       auto* var = exec_scope.FindVar(vname);
       if (var == nullptr) continue;
-      CheckVarHasNanOrInfRet(op.Type(), var, vname, place, num_ptr);
+      CheckVarHasNanOrInfRet(op.Type(), var, vname, place);
     }
   }
   if (g_check_nan_inf_ret) {

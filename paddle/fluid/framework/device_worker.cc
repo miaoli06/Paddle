@@ -436,7 +436,7 @@ void DeviceWorker::DumpParamBoxPS(const Scope& scope, const int batch_id) {
     }
     LoDTensor* tensor = var->GetMutable<LoDTensor>();
     framework::LoDTensor cpu_tensor;
-    if (platform::is_gpu_place(tensor->place())) {
+    if (!platform::is_cpu_place(tensor->place())) {
       TensorCopySync(*tensor, platform::CPUPlace(), &cpu_tensor);
       tensor = &cpu_tensor;
     }
@@ -470,13 +470,13 @@ void DeviceWorker::DumpFieldBoxPS(const Scope& scope, int dump_mode,
     auto& field = (*dump_fields_)[i];
     Variable* var = scope.FindVar(field);
     if (var == nullptr) {
-      VLOG(0) << "Note: field[" << field
+      VLOG(3) << "Note: field[" << field
               << "] cannot be find in scope, so it was skipped.";
       return;
     }
     LoDTensor* tensor = var->GetMutable<LoDTensor>();
     if (!tensor->IsInitialized()) {
-      VLOG(0) << "Note: field[" << field
+      VLOG(3) << "Note: field[" << field
               << "] is not initialized, so it was skipped.";
       return;
     }
@@ -488,10 +488,10 @@ void DeviceWorker::DumpFieldBoxPS(const Scope& scope, int dump_mode,
     }
     dims[i] = tensor->dims()[1];
     lods[i] = (&tensor->lod());
-    if (platform::is_gpu_place(tensor->place())) {
+    if (!platform::is_cpu_place(tensor->place())) {
       TensorCopySync(*tensor, platform::CPUPlace(), &cpu_tensors[i]);
     } else {
-      cpu_tensors[i].ShareDataWith(tensor->Slice(0, tensor->numel()));
+      cpu_tensors[i] = *tensor;
     }
   });
 

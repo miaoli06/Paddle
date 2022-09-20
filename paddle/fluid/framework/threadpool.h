@@ -196,7 +196,7 @@ inline void split_region(size_t all_num, size_t region_num, size_t region_index,
   }
 }
 template <class THREAD_FUNC>
-inline void parallel_run_range(size_t n, THREAD_FUNC&& func, int thread_num = 32) {
+inline void parallel_run_range(size_t n, THREAD_FUNC&& func, int thread_num = 20) {
   paddle::framework::ThreadPool* thrgrp = get_thread_pool(thread_num);
   std::vector<std::future<void>> wait_futures;
   for (int tid = 0; tid < thread_num; ++tid) {
@@ -212,7 +212,7 @@ inline void parallel_run_range(size_t n, THREAD_FUNC&& func, int thread_num = 32
   }
 }
 template <class THREAD_FUNC>
-inline void parallel_run_dynamic(size_t n, THREAD_FUNC&& func, int thread_num = 32) {
+inline void parallel_run_dynamic(size_t n, THREAD_FUNC&& func, int thread_num = 20) {
   paddle::framework::ThreadPool* thrgrp = get_thread_pool(thread_num);
   std::vector<std::future<void>> wait_futures;
   std::atomic<size_t> counter(0);

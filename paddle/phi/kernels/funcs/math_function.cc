@@ -150,7 +150,28 @@ struct TensorSetConstantCPU {
   paddle::framework::Tensor* tensor_;
   const void* value_;
 };
-
+struct TensorSetConstantEx {
+  TensorSetConstantEx(paddle::framework::Tensor* tensor,
+                       const void* value,
+                       paddle::platform::Place place)
+      : tensor_(tensor), value_(value), place_(place) {}
+  template <typename T>
+  void apply() const {
+    auto* begin = tensor_->mutable_data<T>(place_);
+    int numel = tensor_->numel();
+    const T* num = reinterpret_cast<const T*>(value_);
+    std::unique_ptr<T[]> data_cpu(new T[numel]);
+    std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(*num));
+    paddle::memory::Copy(place_,
+                         begin,
+                         phi::CPUPlace(),
+                         static_cast<void*>(data_cpu.get()),
+                         numel * sizeof(T));
+  }
+  paddle::framework::Tensor* tensor_;
+  const void* value_;
+  paddle::platform::Place place_;
+};
 template <>
 void set_constant_with_place<paddle::platform::XPUPlace>(
     const paddle::platform::DeviceContext& context,
@@ -231,23 +252,19 @@ struct TensorSetConstantWithPlace
   paddle::framework::Tensor* tensor_;
   const void* value_;
 };
-
 void set_constant(const paddle::platform::DeviceContext& context,
                   paddle::framework::Tensor* tensor,
                   const void* value) {
-  TensorSetConstantWithPlace func(context, tensor, value);
-#ifdef PADDLE_WITH_CUSTOM_DEVICE
-  if (paddle::platform::is_custom_place(context.GetPlace())) {
-    func(phi::CPUPlace());
-    return;
-  }
-#endif
+  auto place = context.GetPlace();
+  if (paddle::platform::is_gpu_place(place)) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  // tensor->place().apply_visitor(func);
-  paddle::platform::VisitPlace(tensor->place(), func);
-#else
-  func(phi::CPUPlace());
+    TensorSetConstantWithPlace func(context, tensor, value);
+    paddle::platform::VisitPlace(tensor->place(), func);
 #endif
+  } else {
+    phi::VisitDataType(tensor->dtype(),
+        TensorSetConstantEx(tensor, value, place));
+  }
 }
 
 template struct ColwiseSum<phi::CPUContext, float>;

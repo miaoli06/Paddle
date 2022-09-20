@@ -26,21 +26,21 @@ namespace operators {
 using LoDTensor = framework::LoDTensor;
 
 template <typename T>
-class FusedSeqpoolCVMOpCPUKernel : public framework::OpKernel<T> {
+class FusedSeqpoolCVMOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     PADDLE_THROW(platform::errors::Unimplemented(
-        "Unimplemented CPU kernel for FusedSeqpoolCVMOp, only support GPU "
+        "Unimplemented kernel for FusedSeqpoolCVMOp, only support GPU "
         "now."));
   }
 };
 
 template <typename T>
-class FusedSeqpoolCVMGradOpCPUKernel : public framework::OpKernel<T> {
+class FusedSeqpoolCVMGradOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     PADDLE_THROW(platform::errors::Unimplemented(
-        "Unimplemented CPU kernel for FusedSeqpoolCVMGradOp, only support GPU "
+        "Unimplemented kernel for FusedSeqpoolCVMGradOp, only support GPU "
         "now."));
   }
 };

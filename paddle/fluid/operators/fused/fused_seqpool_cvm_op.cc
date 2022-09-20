@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/operators/fused/fused_seqpool_cvm_op.h"
+#include "paddle/fluid/framework/threadpool.h"
 #include <string>
 namespace paddle {
 namespace operators {
@@ -226,6 +227,217 @@ class FusedSeqpoolCVMGradOpMaker : public framework::SingleGradOpMaker<T> {
     op_desc_ptr->SetAttrMap(this->Attrs());
   }
 };
+
+using LoDTensor = framework::LoDTensor;
+
+#define CHECK_USE_QUANT  \
+    if (need_filter && quant_ratio > 0) { \
+     auto &show = input_data[k * embedding_size]; \
+     auto &click = input_data[k * embedding_size + 1]; \
+     if ((show - click) * show_coeff + click * clk_coeff < threshold) { \
+        continue; \
+     } \
+    }
+
+#define QUANT_VALUE(val)  \
+    (static_cast<int>(val * quant_ratio + 0.5) / static_cast<float>(quant_ratio));
+
+#define CHECK_QUANT_AND_GETVAL(in_val)  \
+    if (quant_ratio > 0) {  \
+      if (need_filter) { \
+        auto &show = input_data[k * embedding_size]; \
+        auto &click = input_data[k * embedding_size + 1]; \
+        if ((show - click) * show_coeff + click * clk_coeff < threshold) {  \
+           continue;  \
+        }  \
+      } \
+      val += QUANT_VALUE(in_val); \
+    } else { \
+      val += in_val; \
+    }
+
+template <typename T>
+class FusedSeqpoolCVMOpCPUKernel : public framework::OpKernel<T> {
+ public:
+  void Compute(const framework::ExecutionContext& ctx) const override {
+    auto inputs = ctx.MultiInput<LoDTensor>("X");
+    auto outputs = ctx.MultiOutput<framework::Tensor>("Out");
+
+    const auto slot_size = inputs.size();
+    auto padding_value = ctx.Attr<float>("pad_value");
+    auto use_cvm = ctx.Attr<bool>("use_cvm");
+    bool need_filter = ctx.Attr<bool>("need_filter");
+    float show_coeff = ctx.Attr<float>("show_coeff");
+    float clk_coeff = ctx.Attr<float>("clk_coeff");
+    float threshold = ctx.Attr<float>("threshold");
+    const int cvm_offset = ctx.Attr<int>("cvm_offset");
+    const int quant_ratio = ctx.Attr<int>("quant_ratio");
+    bool clk_filter = ctx.Attr<bool>("clk_filter");
+
+    auto place = ctx.GetPlace();
+
+    int batch_size = -1;
+    int embedding_size = inputs[0]->numel() / inputs[0]->dims()[0];
+    paddle::framework::parallel_run_dynamic(slot_size, [&](const size_t i) {
+//    for (size_t i = 0; i < slot_size; ++i) {
+      const auto *input = inputs[i];
+      CHECK(input->lod().size() == 1);
+
+      auto lod_data = input->lod()[0];
+      int cur_batch = lod_data.size() - 1;
+      if (batch_size == -1) {
+        batch_size = cur_batch;
+      } else {
+        CHECK(batch_size == cur_batch) << "batch: " << batch_size
+            << ", current: " << cur_batch;
+      }
+
+      const T *input_data = reinterpret_cast<const T*>(input->data<T>());
+      auto *output = outputs[i];
+      if (use_cvm) {
+        if (clk_filter) {
+          int dim_size = embedding_size - 1;
+          output->Resize({cur_batch, dim_size});
+          T *out_data = reinterpret_cast<T*>(output->mutable_data<T>(place));
+          // ins
+          for (int j = 0; j < cur_batch; ++j) {
+            auto &start = lod_data[j];
+            auto &end = lod_data[j + 1];
+            // show, embed, embedx
+            for (int dimx = 0; dimx < dim_size; ++dimx) {
+              double val = padding_value;
+              if (dimx == 0) { // show
+                for (auto k = start; k < end; ++k) {
+                  CHECK_USE_QUANT;
+                  val += input_data[k * embedding_size + dimx];
+                }
+                out_data[j * dim_size + dimx] = log(val + 1);
+              } else {
+                for (auto k = start; k < end; ++k) {
+                  CHECK_QUANT_AND_GETVAL(input_data[k * embedding_size + 1 + dimx]);
+                }
+                out_data[j * dim_size + dimx] = val;
+              }
+            }
+          }
+        } else {
+          output->Resize({cur_batch, embedding_size});
+          T *out_data = reinterpret_cast<T*>(output->mutable_data<T>(place));
+          // ins
+          for (int j = 0; j < cur_batch; ++j) {
+            auto &start = lod_data[j];
+            auto &end = lod_data[j + 1];
+            // show, click, embed, embedx
+            for (int dimx = 0; dimx < embedding_size; ++dimx) {
+              double val = padding_value;
+              if (dimx == 0) { // show
+                for (auto k = start; k < end; ++k) {
+                  CHECK_USE_QUANT;
+                  val += input_data[k * embedding_size + dimx];
+                }
+                out_data[j * embedding_size + dimx] = log(val + 1);
+              } else if (dimx == 1) { // ctr log(click) - log(show)
+                for (auto k = start; k < end; ++k) {
+                  CHECK_USE_QUANT;
+                  val += input_data[k * embedding_size + dimx];
+                }
+                out_data[j * embedding_size + dimx] = log(val + 1)
+                    - out_data[j * embedding_size];
+              } else {
+                for (auto k = start; k < end; ++k) {
+                  CHECK_QUANT_AND_GETVAL(input_data[k * embedding_size + dimx]);
+                }
+                out_data[j * embedding_size + dimx] = val;
+              }
+            }
+          }
+        }
+      } else {
+        int dim_size = embedding_size - cvm_offset;
+        output->Resize({cur_batch, dim_size});
+        // no cvm
+        T *out_data = reinterpret_cast<T*>(output->mutable_data<T>(place));
+        // ins
+        for (int j = 0; j < cur_batch; ++j) {
+          auto &start = lod_data[j];
+          auto &end = lod_data[j + 1];
+          // show, click, embed, embedx
+          for (int dimx = 0; dimx < dim_size; ++dimx) {
+            double val = padding_value;
+            for (auto k = start; k < end; ++k) {
+              CHECK_QUANT_AND_GETVAL(input_data[k * embedding_size + cvm_offset + dimx]);
+            }
+            out_data[j * dim_size + dimx] = val;
+          }
+        }
+      }
+    });
+  }
+};
+
+template <typename T>
+class FusedSeqpoolCVMGradOpCPUKernel : public framework::OpKernel<T> {
+ public:
+  void Compute(const framework::ExecutionContext& ctx) const override {
+    auto out_grads = ctx.MultiInput<LoDTensor>(framework::GradVarName("Out"));
+    auto in_grads = ctx.MultiOutput<LoDTensor>(framework::GradVarName("X"));
+    auto *cvm = ctx.Input<LoDTensor>("CVM");
+
+    std::string pooltype = ctx.Attr<std::string>("pooltype");
+    auto use_cvm = ctx.Attr<bool>("use_cvm");
+    const int cvm_offset = ctx.Attr<int>("cvm_offset");
+    bool clk_filter = ctx.Attr<bool>("clk_filter");
+
+    const auto slot_size = in_grads.size();
+    auto place = ctx.GetPlace();
+
+    int embedding_size = in_grads[0]->numel() / in_grads[0]->dims()[0];
+    int dim_size = embedding_size;
+    int dim_off = 0;
+    if (use_cvm) {
+      if (clk_filter) {
+        dim_size = embedding_size - 1;
+        dim_off = 1;
+      }
+    } else {
+      dim_size = embedding_size - cvm_offset;
+      dim_off = cvm_offset;
+    }
+    int batch_size = -1;
+    paddle::framework::parallel_run_dynamic(slot_size, [&](const size_t i) {
+//    for (size_t i = 0; i < slot_size; ++i) {
+      auto *in_grad = in_grads[i];
+
+      auto lod_data = in_grad->lod()[0];
+      int cur_batch = lod_data.size() - 1;
+      if (batch_size == -1) {
+        batch_size = cur_batch;
+      } else {
+        CHECK(batch_size == cur_batch) << "batch: " << batch_size
+            << ", current: " << cur_batch;
+      }
+
+      const T *cvm_data = reinterpret_cast<const T*>(cvm->data<T>());
+      const T *out_grads_value =
+          reinterpret_cast<const T*>(out_grads[i]->data<T>());
+      T *in_grads_value = reinterpret_cast<T*>(in_grad->mutable_data<T>(place));
+
+      for (int j = 0; j < cur_batch; ++j) {
+        auto &start = lod_data[j];
+        auto &end = lod_data[j + 1];
+        for (int dim_id = 0; dim_id < embedding_size; ++dim_id) {
+          const T &val = (dim_id < cvm_offset) ?
+              cvm_data[j * cvm_offset + dim_id] :
+                  out_grads_value[j * dim_size + dim_id - dim_off];
+          for (auto k = start; k < end; ++k) {
+            in_grads_value[k * embedding_size + dim_id] = val;
+          }
+        }
+      }
+    });
+  }
+};
+
 
 }  // namespace operators
 }  // namespace paddle

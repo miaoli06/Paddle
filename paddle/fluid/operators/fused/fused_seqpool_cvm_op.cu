@@ -181,16 +181,18 @@ __global__ void FusedCVMKernelWithCVM(const size_t N, T **output_values,
     int offset = i % embedding_size;
     int x = key / batch_size;  // slot id
     int y = key % batch_size;  // ins id
-    if (offset == 0) {         // show
-      *(output_values[x] + y * embedding_size) =
-          log(*(seqpool_output_values[x] + y * embedding_size) + 1);
-    } else if (offset == 1) {  // click
-      *(output_values[x] + y * embedding_size + offset) =
-          log(*(seqpool_output_values[x] + y * embedding_size + 1) + 1) -
-          log(*(seqpool_output_values[x] + y * embedding_size) + 1);
+    // set ptr
+    T *in = (seqpool_output_values[x] + y * embedding_size);
+    T *out = (output_values[x] + y * embedding_size + offset);
+    if (offset == 0) { // log(show + 1)
+      *out = log(in[0] + 1);
+    } else if (offset == 1) { // ctr = log(click + 1) - log(show + 1)
+      *out = log(in[1] + 1) - log(in[0] + 1);
+      if (isnan(*out) || isinf(*out)) {
+        printf("slot id %d, ins id %d, data: %f, show: %f, click: %f\n", x, y, *out, in[0], in[1]);
+      }
     } else {
-      *(output_values[x] + y * embedding_size + offset) =
-          *(seqpool_output_values[x] + y * embedding_size + offset);
+      *out = in[offset];
     }
   }
 }
