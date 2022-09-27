@@ -544,6 +544,8 @@ void InitGLOG(const std::string &prog_name) {
         (LPTOP_LEVEL_EXCEPTION_FILTER)ApplicationCrashHandler);
 #endif
     google::InitGoogleLogging(strdup(prog_name.c_str()));
+    printf("init glog path: %s\n", prog_name.c_str());
+    google::LogToStderr();
 #ifndef _WIN32
     google::InstallFailureSignalHandler();
     google::InstallFailureWriter(&SignalHandle);

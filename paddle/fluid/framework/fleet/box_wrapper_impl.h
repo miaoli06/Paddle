@@ -86,6 +86,8 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
 
   int64_t* slot_lens = reinterpret_cast<int64_t*>(
       dev.slot_lens.mutable_data<int64_t>({(slot_num + 1), 1}, place));
+
+  dev.copy_keys_timer.Resume();
   cudaMemcpyAsync(gpu_keys, keys.data(), keys.size() * sizeof(uint64_t*),
                   cudaMemcpyHostToDevice, stream);
   cudaMemcpyAsync(slot_lens, slot_lengths_lod.data(),
@@ -93,6 +95,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                   cudaMemcpyHostToDevice, stream);
   this->CopyKeys(place, gpu_keys, total_keys, slot_lens, slot_num,
                  static_cast<int>(total_length), key2slot);
+  dev.copy_keys_timer.Pause();
 
   // dedup keys pull
   if (FLAGS_enable_pullpush_dedup_keys) {
@@ -138,6 +141,8 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
     // values.size() not sure equal slot_num
     float** gpu_values = dev.values_ptr_tensor.mutable_data<float*>(
         static_cast<int>(values.size() * sizeof(float*)), place);
+
+    dev.copy_values_timer.Resume();
     cudaMemcpyAsync(gpu_values, values.data(), values.size() * sizeof(float*),
                     cudaMemcpyHostToDevice, stream);
 
@@ -145,6 +150,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                       pull_offset, slot_lens, slot_num, key2slot, hidden_size,
                       expand_embed_dim, total_length, total_dims, skip_offset,
                       expand_only, d_restore_idx);
+    dev.copy_values_timer.Pause();
   } else {
     int64_t total_bytes = total_length * feature_pull_size_;
     void* total_values_gpu =
@@ -161,6 +167,8 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
     // values.size() not sure equal slot_num
     float** gpu_values = dev.values_ptr_tensor.mutable_data<float*>(
         static_cast<int>(values.size() * sizeof(float*)), place);
+
+    dev.copy_values_timer.Resume();
     cudaMemcpyAsync(gpu_values, values.data(), values.size() * sizeof(float*),
                     cudaMemcpyHostToDevice, stream);
 
@@ -168,6 +176,7 @@ void BoxWrapper::PullSparseCaseGPU(const paddle::platform::Place& place,
                       pull_offset, slot_lens, slot_num, key2slot, hidden_size,
                       expand_embed_dim, total_length, total_dims, skip_offset,
                       expand_only);
+    dev.copy_values_timer.Pause();
   }
   all_timer.Pause();
 #endif
@@ -207,8 +216,10 @@ void BoxWrapper::PullSparseCaseCPU(const paddle::platform::Place& place,
   int* total_dims = reinterpret_cast<int*>(
       dev.dims_tensor.mutable_data<int>({total_length, 1}, place));
 
+  dev.copy_keys_timer.Resume();
   this->CopyCPUKeys(place, keys, total_keys, slot_lens, slot_num,
                     static_cast<int>(total_length), key2slot);
+  dev.copy_keys_timer.Pause();
 
   // dedup keys pull
   uint32_t* d_restore_idx =
@@ -249,10 +260,12 @@ void BoxWrapper::PullSparseCaseCPU(const paddle::platform::Place& place,
                                 "PullSparseGPU failed in BoxPS."));
   pull_boxps_timer.Pause();
 
+  dev.copy_values_timer.Resume();
   this->CopyForPullCPU(place, keys, values, total_values_gpu, slot_lens,
                        slot_num, key2slot, hidden_size, expand_embed_dim,
                        total_length, total_dims, skip_offset, expand_only,
                        d_restore_idx);
+  dev.copy_values_timer.Pause();
 
   all_timer.Pause();
 }

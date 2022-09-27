@@ -15,16 +15,17 @@
 #pragma once
 #include <memory>
 #include <unordered_map>
-
-#include "butil/time.h"
-#include "bvar/latency_recorder.h"
+#include "paddle/fluid/platform/timer.h"
+//#include "butil/time.h"
+//#include "bvar/latency_recorder.h"
 #include "glog/logging.h"
 
 namespace paddle {
 namespace distributed {
 
 struct CostProfilerNode {
-  std::shared_ptr<brpc::bvar::LatencyRecorder> recorder;
+//  std::shared_ptr<brpc::bvar::LatencyRecorder> recorder;
+  uint64_t recorder;
 };
 
 class CostProfiler {
@@ -40,8 +41,8 @@ class CostProfiler {
       return;
     }
     auto profiler_node = std::make_shared<CostProfilerNode>();
-    profiler_node->recorder.reset(
-        new brpc::bvar::LatencyRecorder("cost_profiler", label));
+//    profiler_node->recorder.reset(
+//        new brpc::bvar::LatencyRecorder("cost_profiler", label));
     _cost_profiler_map[label] = profiler_node;
   }
 
@@ -63,31 +64,36 @@ class CostTimer {
  public:
   explicit CostTimer(const std::string& label) {
     _label = label;
-    auto& profiler = CostProfiler::instance();
-    _profiler_node = profiler.profiler(label);
-    // 如果不在profiler中，则使用log输出耗时信息
-    _is_print_cost = _profiler_node == NULL;
-    _start_time_ms = butil::gettimeofday_ms();
+//    auto& profiler = CostProfiler::instance();
+//    _profiler_node = profiler.profiler(label);
+//    // 如果不在profiler中，则使用log输出耗时信息
+//    _is_print_cost = _profiler_node == NULL;
+//    _start_time_ms = butil::gettimeofday_ms();
+    _tm.Start();
   }
-  explicit CostTimer(CostProfilerNode& profiler_node) {  // NOLINT
-    _is_print_cost = false;
-    _profiler_node = &profiler_node;
-    _start_time_ms = butil::gettimeofday_ms();
+  explicit CostTimer(CostProfilerNode& /**profiler_node*/) {  // NOLINT
+//    _is_print_cost = false;
+//    _profiler_node = &profiler_node;
+//    _start_time_ms = butil::gettimeofday_ms();
+    _tm.Start();
   }
   ~CostTimer() {
-    if (_is_print_cost) {
-      VLOG(3) << "CostTimer label:" << _label
-              << ", cost:" << butil::gettimeofday_ms() - _start_time_ms << "ms";
-    } else {
-      *(_profiler_node->recorder) << butil::gettimeofday_ms() - _start_time_ms;
-    }
+//    if (_is_print_cost) {
+//      VLOG(3) << "CostTimer label:" << _label
+//              << ", cost:" << butil::gettimeofday_ms() - _start_time_ms << "ms";
+//    } else {
+//      *(_profiler_node->recorder) << butil::gettimeofday_ms() - _start_time_ms;
+//    }
+    _tm.Pause();
+    VLOG(3) << "CostTimer label:" << _label << ", cost: " << _tm.ElapsedMS() << "ms";
   }
 
  private:
   std::string _label;
-  bool _is_print_cost;
-  uint64_t _start_time_ms;
-  CostProfilerNode* _profiler_node;
+//  bool _is_print_cost;
+//  uint64_t _start_time_ms;
+//  CostProfilerNode* _profiler_node;
+  platform::Timer _tm;
 };
 }  // namespace distributed
 }  // namespace paddle

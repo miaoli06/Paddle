@@ -717,6 +717,8 @@ void BoxPSWorker::TrainFilesWithProfiler() {
                << ", mean time: " << op_total_time[i] / accum_num
                << "us, sum:" << op_total_time[i] / 1000000.0 << "sec";
   }
+  auto box_ptr = BoxWrapper::GetInstance();
+  box_ptr->PrintSyncTimer(device_id_, outer_timer.ElapsedSec());
 }
 }  // namespace framework
 }  // namespace paddle

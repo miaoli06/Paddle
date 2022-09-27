@@ -760,6 +760,8 @@ void BoxWrapper::PrintSyncTimer(int device, double train_span) {
                << ", train dnn: " << train_span
                << ", sparse pull span: " << dev.all_pull_timer.ElapsedSec()
                << ", dedup span: " << dev.pull_dedup_timer.ElapsedSec()
+               << ", copy keys: " << dev.copy_keys_timer.ElapsedSec()
+               << ", copy pull: " << dev.copy_values_timer.ElapsedSec()
                << ", boxps span: " << dev.boxps_pull_timer.ElapsedSec()
                << ", push span: " << dev.all_push_timer.ElapsedSec()
                << ", boxps span:" << dev.boxps_push_timer.ElapsedSec()
@@ -774,6 +776,8 @@ void BoxWrapper::PrintSyncTimer(int device, double train_span) {
                << ", train dnn: " << train_span
                << ", sparse pull span: " << dev.all_pull_timer.ElapsedSec()
                << ", dedup span: " << dev.pull_dedup_timer.ElapsedSec()
+               << ", copy keys: " << dev.copy_keys_timer.ElapsedSec()
+               << ", copy pull: " << dev.copy_values_timer.ElapsedSec()
                << ", boxps span: " << dev.boxps_pull_timer.ElapsedSec()
                << ", push span: " << dev.all_push_timer.ElapsedSec()
                << ", boxps span:" << dev.boxps_push_timer.ElapsedSec()
@@ -785,6 +789,8 @@ void BoxWrapper::PrintSyncTimer(int device, double train_span) {
                << ", train dnn: " << train_span
                << ", sparse pull span: " << dev.all_pull_timer.ElapsedSec()
                << ", dedup span: " << dev.pull_dedup_timer.ElapsedSec()
+               << ", copy keys: " << dev.copy_keys_timer.ElapsedSec()
+               << ", copy pull: " << dev.copy_values_timer.ElapsedSec()
                << ", boxps span: " << dev.boxps_pull_timer.ElapsedSec()
                << ", push span: " << dev.all_push_timer.ElapsedSec()
                << ", boxps span:" << dev.boxps_push_timer.ElapsedSec()
@@ -992,7 +998,7 @@ bool BoxWrapper::LoadSSD2Mem(const std::string& date) {
 }
 //===================== box filemgr ===============================
 BoxFileMgr::BoxFileMgr() {
-  LOG(WARNING) << "BoxFileMgr construct";
+  fprintf(stdout, "BoxFileMgr construct\n");
 }
 BoxFileMgr::~BoxFileMgr() { destory(); }
 bool BoxFileMgr::init(const std::string& fs_name, const std::string& fs_ugi,

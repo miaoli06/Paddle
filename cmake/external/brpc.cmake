@@ -54,7 +54,7 @@ ExternalProject_Add(
   ${EXTERNAL_PROJECT_LOG_ARGS}
   # TODO(gongwb): change to de newst repo when they changed
   GIT_REPOSITORY "https://github.com/qingshui/incubator-brpc.git"
-  GIT_TAG "098f6db0b003c7d975e6ba57074258957020c00e"
+  GIT_TAG "1fba0bcb44b6fadf96c252eb0d46479607f556d7"
   PREFIX ${BRPC_PREFIX_DIR}
   UPDATE_COMMAND ""
   CMAKE_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}

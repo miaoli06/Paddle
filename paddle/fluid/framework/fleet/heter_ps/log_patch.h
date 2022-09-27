@@ -23,7 +23,7 @@ limitations under the License. */
 #define COMPACT_GOOGLE_LOG_INFO google::LogMessage(__FILE__, __LINE__)
 
 #undef LOG
-#define LOG(severity) COMPACT_GOOGLE_LOG_##severity.stream()
+#define LOG(severity) COMPACT_GOOGLE_LOG_ ## severity.stream()
 
 #undef LOG_IF
 #define LOG_IF(severity, condition) \

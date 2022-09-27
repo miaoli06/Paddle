@@ -323,6 +323,8 @@ class BoxWrapper {
     platform::Timer dense_nccl_timer;
     platform::Timer dense_sync_timer;
     platform::Timer pull_dedup_timer;
+    platform::Timer copy_keys_timer;
+    platform::Timer copy_values_timer;
 
     int64_t total_key_length = 0;
     int64_t dedup_key_length = 0;
@@ -335,6 +337,8 @@ class BoxWrapper {
       dense_nccl_timer.Reset();
       dense_sync_timer.Reset();
       pull_dedup_timer.Reset();
+      copy_keys_timer.Reset();
+      copy_values_timer.Reset();
     }
     double GpuMemUsed(void) {
       size_t total = 0;
@@ -663,7 +667,16 @@ class BoxWrapper {
   }
   // get feature offset info
   void GetFeatureOffsetInfo(void);
-
+  // execute func
+  void ExecuteFunc(const paddle::platform::Place& place,
+      const size_t &num, std::function<void(const size_t &)> func) {
+    boxps_ptr_->ExecuteFunc(GetPlaceDeviceId(place), num, func);
+  }
+  // execute func
+  void ExecRangeFunc(const paddle::platform::Place& place,
+        const size_t &num, std::function<void(const size_t &, const size_t &)> func) {
+    boxps_ptr_->ExecRangeFunc(GetPlaceDeviceId(place), num, func);
+  }
  private:
   static cudaStream_t stream_list_[MAX_GPU_NUM];
   static std::shared_ptr<BoxWrapper> s_instance_;

@@ -13,7 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/operators/fused/fused_seqpool_cvm_op.h"
+#ifdef PADDLE_WITH_BOX_PS
+#include "paddle/fluid/framework/fleet/box_wrapper.h"
+#else
 #include "paddle/fluid/framework/threadpool.h"
+#endif
 #include <string>
 namespace paddle {
 namespace operators {
@@ -278,8 +282,12 @@ class FusedSeqpoolCVMOpCPUKernel : public framework::OpKernel<T> {
 
     int batch_size = -1;
     int embedding_size = inputs[0]->numel() / inputs[0]->dims()[0];
-    paddle::framework::parallel_run_dynamic(slot_size, [&](const size_t i) {
-//    for (size_t i = 0; i < slot_size; ++i) {
+#ifdef PADDLE_WITH_BOX_PS
+    auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+    box_ptr->ExecuteFunc(place, slot_size, [&](const size_t &i) {
+#else
+    paddle::framework::parallel_run_dynamic(slot_size, [&](const size_t &i) {
+#endif
       const auto *input = inputs[i];
       CHECK(input->lod().size() == 1);
 
@@ -404,7 +412,12 @@ class FusedSeqpoolCVMGradOpCPUKernel : public framework::OpKernel<T> {
       dim_off = cvm_offset;
     }
     int batch_size = -1;
-    paddle::framework::parallel_run_dynamic(slot_size, [&](const size_t i) {
+#ifdef PADDLE_WITH_BOX_PS
+    auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+    box_ptr->ExecuteFunc(place, slot_size, [&](const size_t i) {
+#else
+    paddle::framework::parallel_run_dynamic(slot_size, [&](const size_t &i) {
+#endif
 //    for (size_t i = 0; i < slot_size; ++i) {
       auto *in_grad = in_grads[i];
 
