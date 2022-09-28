@@ -7593,12 +7593,14 @@ class BoxPSOptimizer(object):
         whole_parameters = [e.name for e in program.block(0).all_parameters()]
         param_need_sync = []
         for i, section_p in enumerate(program_list):
-            if not isinstance(self._place_list[i], core.CUDAPlace):
+            if not isinstance(self._place_list[i], core.CUDAPlace) and \
+                not isinstance(self._place_list[i], core.XPUPlace):
                 continue
             section_var = [e for e in section_p["program"].block(0).vars]
             for p in section_var:
                 if p in whole_parameters:
                     param_need_sync.append(p)
+        print("param_need_sync: %s" % (param_need_sync))
         program._pipeline_opt = {
             "trainer": "BoxPSTrainer",
             "device_worker": "BoxPSWorker",

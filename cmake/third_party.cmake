@@ -304,7 +304,7 @@ if(WITH_PYTHON)
   list(APPEND third_party_deps extern_pybind)
 endif()
 
-if(WITH_TESTING OR WITH_DISTRIBUTE)
+if(WITH_TESTING)
   include(external/gtest) # download, build, install gtest
   list(APPEND third_party_deps extern_gtest)
 endif()

@@ -23,8 +23,11 @@ limitations under the License. */
 #include <thrust/shuffle.h>
 #include <sstream>
 #include "cub/cub.cuh"
+
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
+#endif
 
 DECLARE_bool(enable_opt_get_features);
 
@@ -192,7 +195,9 @@ void SlotRecordInMemoryDataFeed::CopyForTensor(
                                   used_slots);
   cudaStreamSynchronize(stream);
 }
+#endif
 
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
 __global__ void GraphFillCVMKernel(int64_t *tensor, int len) {
   CUDA_KERNEL_LOOP(idx, len) { tensor[idx] = 1; }
 }

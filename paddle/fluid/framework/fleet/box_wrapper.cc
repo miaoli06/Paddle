@@ -923,7 +923,7 @@ void BoxWrapper::Finalize() {
     psagents_.clear();
   }
   if (device_caches_ != nullptr) {
-    delete device_caches_;
+    delete [] device_caches_;
     device_caches_ = nullptr;
   }
   s_instance_ = nullptr;

@@ -820,6 +820,7 @@ class BoxPSAsynDenseTable {
   void ThreadUpdate(int thread_id, const std::vector<LoDTensor*>& grad,
                     size_t merge_num);
   void AsyncUpdate();
+  int64_t GetParamTotalLen(void) { return total_param_len_; }
 
  private:
   int device_num_ = 0;

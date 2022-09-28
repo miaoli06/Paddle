@@ -28,7 +28,7 @@ if(WITH_MKLDNN)
 endif()
 
 
-if(WITH_DISTRIBUTE)
+if(WITH_NCCL OR WITH_RCCL OR WITH_XPU_BKCL OR WITH_ASCEND_CL)
     add_subdirectory(collective)
 endif()
 

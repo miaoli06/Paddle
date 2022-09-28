@@ -44,7 +44,7 @@ BoxPSAsynDenseTable::BoxPSAsynDenseTable(const int device_num)
   for (int i = 0; i < buffer_size; i++) {
     buffer_poll_->Send(&device_grads_[i]);
   }
-  VLOG(0) << "BoxPSAsynDenseTable init finish ";
+  VLOG(1) << "BoxPSAsynDenseTable init finish ";
 }
 BoxPSAsynDenseTable::~BoxPSAsynDenseTable() {}
 
@@ -53,11 +53,11 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
     const std::vector<std::string>& persistable_vars) {
   std::set<std::string> async_param_name;
   root_scope_ = const_cast<paddle::framework::Scope*>(&root_scope);
-  VLOG(0) << "Begin Init For Aysnc Optimize";
+  VLOG(1) << "Begin Init For Aysnc Optimize";
   for (const auto& e : param_need_sync) {
     if (e.find("param") != std::string::npos &&
         e.find("pow_acc") == std::string::npos) {
-      VLOG(0) << "async mode choose " << e << " to update";
+      VLOG(3) << "async mode choose " << e << " to update";
       async_param_list_.push_back(e);
       async_param_list_.push_back(e + "_moment1_0");
       async_param_list_.push_back(e + "_moment2_0");
@@ -66,7 +66,6 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
     }
   }
   original_ps_.resize(async_param_list_.size());
-  VLOG(0) << "async_param_list_.size(): " << async_param_list_.size();
   std::sort(
       async_param_list_.begin(),
       async_param_list_
@@ -76,7 +75,6 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
         root_scope.FindVar(async_param_list_[i])->Get<LoDTensor>();
     total_param_len_ += root_tensor.numel();
   }
-  VLOG(0) << "alloc param length dense table:" << total_param_len_;
 
   ps_.mutable_data<float>({total_param_len_, 1}, platform::CPUPlace());
   mom1_.mutable_data<float>({total_param_len_, 1}, platform::CPUPlace());
@@ -87,9 +85,8 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
   }
 
   int64_t offset = 0;
-  VLOG(0) << " param size is " << async_param_list_.size();
   for (size_t i = 0; i < async_param_list_.size(); i++) {
-    VLOG(0) << "begin to copy " << async_param_list_[i];
+    VLOG(3) << "begin to copy " << async_param_list_[i];
     const LoDTensor& root_tensor =
         root_scope.FindVar(async_param_list_[i])->Get<LoDTensor>();
     auto dim = root_tensor.dims();
@@ -120,7 +117,7 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
           platform::errors::PreconditionNotMet(
               "lr have been set, previous value: %f, current var is %s",
               base_lr_, e.c_str()));
-      VLOG(0) << "begin to copy global learning rate: " << e;
+      VLOG(3) << "begin to copy global learning rate: " << e;
       const LoDTensor& root_tensor = root_scope.FindVar(e)->Get<LoDTensor>();
       const float* gpu_lr = root_tensor.data<float>();
       if (platform::is_gpu_place(root_tensor.place()) || platform::is_xpu_place(root_tensor.place())) {
@@ -130,7 +127,9 @@ std::set<std::string> BoxPSAsynDenseTable::Init(
       }
     }
   }
-  VLOG(0) << "base lr is " << base_lr_;
+  VLOG(0) << "Aysnc alloc dense table param size: " << async_param_list_.size()
+          << ", total length:" << total_param_len_ << ", base_lr=" << base_lr_;
+
   ps_buffer_.reset(new PSBufferQueue(device_num_ * 3));  // magic number
   all_lr_.resize(total_param_len_);
   auto box_ptr = BoxWrapper::GetInstance();
@@ -159,7 +158,7 @@ void BoxPSAsynDenseTable::Finalize(void) {
   buffer_poll_->Close();
 
   for (size_t i = 0; i < async_param_list_.size(); ++i) {
-    VLOG(0) << "begin to copy back" << async_param_list_[i];
+    VLOG(3) << "begin to copy back" << async_param_list_[i];
     auto* root_tensor =
         root_scope_->Var(async_param_list_[i])->GetMutable<LoDTensor>();
     TensorCopySync(*static_cast<const Tensor*>(&original_ps_[i]),
@@ -409,6 +408,9 @@ int64_t BoxPSWorker::AllocParamTensorAsync() {
   VLOG(2) << "param length:" << total_param_len
           << "param grad length:" << total_param_len
           << ", device num:" << device_num_;
+
+  CHECK(total_param_len > 0) << "error param total zero";
+  CHECK(dense_table_->GetParamTotalLen() == total_param_len);
 
   param_async_.mutable_data<float>({total_param_len, 1}, place_);
   grad_async_.mutable_data<float>({total_param_len, 1}, place_);
