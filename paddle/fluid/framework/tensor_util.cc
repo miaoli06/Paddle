@@ -26,6 +26,9 @@ limitations under the License. */
 #include "paddle/fluid/platform/complex.h"
 #include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/phi/core/dense_tensor.h"
+#if defined(PADDLE_WITH_XPU)
+#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#endif
 
 #ifdef PADDLE_WITH_MKLDNN
 #include "dnnl_debug.h"  // NOLINT
@@ -1577,16 +1580,26 @@ __global__ void kernel_scale_value(const int64_t len, const float* in,
 void TensorScaleValue(const platform::Place& place,
                       const framework::Tensor& tensor, framework::Tensor* out,
                       const float scale) {
+  const float* src = tensor.data<float>();
+  float* dst = out->data<float>();
+  int64_t len = tensor.numel();
 #if defined(PADDLE_WITH_CUDA)
   auto stream = dynamic_cast<phi::GPUContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
-  const float* src = tensor.data<float>();
-  float* dst = out->data<float>();
-  int64_t len = tensor.numel();
   const int BLOCK_SIZE_ = 256;
   kernel_scale_value<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0,
                        stream>>>(len, src, dst, scale);
+#elif defined(PADDLE_WITH_XPU)
+  auto dev_ctx = dynamic_cast<phi::XPUContext*>(
+                      platform::DeviceContextPool::Instance().Get(place));
+  int ret = xpu::scale(dev_ctx->x_context(), src, dst, len, false, scale, 0.0);
+  PADDLE_ENFORCE_EQ(
+        ret,
+        XPU_SUCCESS,
+        phi::errors::External("XPU scale API wrong [%d %s].",
+                              ret,
+                              XPUAPIErrorMsg[ret]));
 #endif
 }
 

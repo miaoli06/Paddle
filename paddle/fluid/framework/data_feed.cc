@@ -30,6 +30,9 @@ limitations under the License. */
 #include "paddle/fluid/platform/timer.h"
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
+#ifdef PADDLE_WITH_XPU
+#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#endif
 
 USE_INT_STAT(STAT_total_feasign_num_in_mem);
 DECLARE_bool(enable_ins_parser_file);
@@ -284,7 +287,8 @@ void DataFeed::CopyToFeedTensor(void* dst, const void* src, size_t size) {
 #elif defined(PADDLE_WITH_HIP)
     hipMemcpy(dst, src, size, hipMemcpyHostToDevice);
 #elif defined(PADDLE_WITH_XPU_KP) || defined(PADDLE_WITH_XPU)
-    xpu_memcpy(dst, src, size, XPUMemcpyKind::XPU_HOST_TO_DEVICE);
+//    xpu_memcpy(dst, src, size, XPUMemcpyKind::XPU_HOST_TO_DEVICE);
+    platform::MemcpySyncH2D(dst, src, size, this->place_);
 #else
     PADDLE_THROW(platform::errors::Unimplemented(
         "Not supported GPU/ROCM, please compile with option WITH_GPU=ON or "
@@ -3329,8 +3333,9 @@ void SlotPaddleBoxDataFeed::PutToFeedSlotVec(const SlotRecord* ins_vec,
       float* feasign = batch_fea.data();
       float* tensor_ptr =
           feed->mutable_data<float>({total_instance, 1}, this->place_);
-      CopyToFeedTensor(tensor_ptr, feasign, total_instance * sizeof(float));
-
+      if (total_instance > 0) {
+        CopyToFeedTensor(tensor_ptr, feasign, total_instance * sizeof(float));
+      }
     } else if (info.type[0] == 'u') {  // uint64
       auto& batch_fea = batch_uint64_feasigns_[j];
       batch_fea.clear();
@@ -3353,7 +3358,9 @@ void SlotPaddleBoxDataFeed::PutToFeedSlotVec(const SlotRecord* ins_vec,
       uint64_t* feasign = batch_fea.data();
       int64_t* tensor_ptr =
           feed->mutable_data<int64_t>({total_instance, 1}, this->place_);
-      CopyToFeedTensor(tensor_ptr, feasign, total_instance * sizeof(int64_t));
+      if (total_instance > 0) {
+        CopyToFeedTensor(tensor_ptr, feasign, total_instance * sizeof(int64_t));
+      }
     }
 
     if (info.dense) {

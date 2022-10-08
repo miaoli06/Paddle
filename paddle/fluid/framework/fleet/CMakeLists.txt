@@ -79,7 +79,7 @@ if(WITH_BOX_PS)
   if(WITH_XPU)
   	cc_library(
    	   box_wrapper
-      SRCS box_wrapper.cc box_wrapper_impl.cc
+      SRCS box_wrapper.cc box_wrapper_impl.cc metrics.cc
       DEPS framework_proto lod_tensor box_ps)
   endif()
 else()

@@ -16,7 +16,9 @@ limitations under the License. */
 
 #include <chrono>
 #include "paddle/fluid/framework/convert_utils.h"
-
+#ifdef PADDLE_WITH_BOX_PS
+#include "paddle/fluid/framework/fleet/box_wrapper.h"
+#endif
 DECLARE_bool(lineid_have_extend_info);
 DECLARE_bool(dump_filed_same_as_aibox);
 
@@ -428,7 +430,13 @@ void DeviceWorker::DumpParamBoxPS(const Scope& scope, const int batch_id) {
   std::vector<std::string> ars(field_num);
 
   // thread process fields
-  parallel_run_dynamic(field_num, [this, &scope, batch_id, &ars](const size_t &id) {
+#ifdef PADDLE_WITH_BOX_PS
+  auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+  box_ptr->ExecuteFunc(platform::CPUPlace(),
+#else
+  parallel_run_dynamic(
+#endif
+      field_num, [this, &scope, batch_id, &ars](const size_t &id) {
     auto &name = (*dump_param_)[id];
     Variable* var = scope.FindVar(name);
     if (var == nullptr) {
@@ -465,8 +473,13 @@ void DeviceWorker::DumpFieldBoxPS(const Scope& scope, int dump_mode,
   std::vector<framework::LoDTensor> cpu_tensors(field_num);
   std::vector<const LoD *> lods(field_num, nullptr);
   // copy fields
-  parallel_run_dynamic(field_num, [this, &dims, &cpu_tensors, &lods, &scope, batch_size](
-      const size_t &i) {
+#ifdef PADDLE_WITH_BOX_PS
+  auto box_ptr = paddle::framework::BoxWrapper::GetInstance();
+  box_ptr->ExecuteFunc(platform::CPUPlace(),
+#else
+  parallel_run_dynamic(
+#endif
+      field_num, [this, &dims, &cpu_tensors, &lods, &scope, batch_size](const size_t &i) {
     auto& field = (*dump_fields_)[i];
     Variable* var = scope.FindVar(field);
     if (var == nullptr) {
@@ -517,9 +530,14 @@ void DeviceWorker::DumpFieldBoxPS(const Scope& scope, int dump_mode,
   std::atomic<size_t> num_cnt{0};
 
   std::vector<std::string> ars(batch_size);
+#ifdef PADDLE_WITH_BOX_PS
+  box_ptr->ExecuteFunc(platform::CPUPlace(),
+#else
   // dump data
-  parallel_run_dynamic(batch_size, [this, &ars, &dims, &cpu_tensors,
-         &lods, &need_dump_func, field_num, &line_cnt, &num_cnt](const size_t &i){
+  parallel_run_dynamic(
+#endif
+      batch_size, [this, &ars, &dims, &cpu_tensors,
+         &lods, &need_dump_func, field_num, &line_cnt, &num_cnt](const size_t &i) {
     const std::string& lineid = device_reader_->GetLineId(i);
     if (!need_dump_func(lineid)) {
       return;

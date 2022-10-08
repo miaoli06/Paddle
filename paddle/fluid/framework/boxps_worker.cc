@@ -29,6 +29,10 @@ limitations under the License. */
 #if defined(PADDLE_WITH_CUDA)
 #include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#elif defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_XPU)
+#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#include "paddle/fluid/platform/device/xpu/bkcl_helper.h"
+#include "paddle/fluid/platform/collective_helper.h"
 #endif
 
 DECLARE_bool(enable_sync_dense_moment);
@@ -496,21 +500,29 @@ void BoxPSWorker::CreateDeviceResource(const ProgramDesc& main_prog) {
   }
 }
 void BoxPSWorker::SyncParam(void) {
-#if defined(PADDLE_WITH_CUDA)
   if (param_sync_.numel() == 0 || sync_mode_ == DenseKStepNode && node_size_ == 1) {
     return;
   }
 
   auto box_ptr = BoxWrapper::GetInstance();
   box_ptr->DenseNcclTimer(device_id_, false, 0x03);
+
+#if defined(PADDLE_WITH_CUDA)
   auto comm = platform::NCCLCommContext::Instance().Get(0, device_id_);
   auto stream = static_cast<phi::GPUContext*>(dev_ctx_)->stream();
-
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+#elif defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_XPU)
+  auto comm = platform::BKCLCommContext::Instance().Get(0, device_id_);
+  XPUStream stream = static_cast<platform::XPUDeviceContext*>(dev_ctx_)
+                         ->x_context()
+                         ->xpu_stream;
+  PADDLE_ENFORCE_XPU_SUCCESS(xpu_wait(stream));
+#endif
   box_ptr->DenseNcclTimer(device_id_, true, 0x02);
-
   int64_t numel = param_sync_.numel();
   float* sendbuff = param_sync_.data<float>();
+
+#if defined(PADDLE_WITH_CUDA)
   if ((node_size_ > 1 && !one_ring_)) {  // KStep Node
     int part_param_len = numel / device_num_;
     float* recv_ptr = &sendbuff[device_id_ * part_param_len];
@@ -531,8 +543,23 @@ void BoxPSWorker::SyncParam(void) {
   const float scale = 1.0 / (device_num_ * node_size_);
   TensorScaleValue(place_, param_sync_, &param_sync_, scale);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-  box_ptr->DenseNcclTimer(device_id_, true, 0x01);
+#elif defined(PADDLE_WITH_XPU_BKCL) || defined(PADDLE_WITH_XPU)
+  PADDLE_ENFORCE_EQ(
+         bkcl_all_reduce(comm->comm(),
+             sendbuff,
+             sendbuff,
+             numel,
+             BKCL_FLOAT,
+             BKCL_ADD,
+             stream),
+             BKCL_SUCCESS,
+             platform::errors::PreconditionNotMet("BKCL all reduce failed"));
+  const float scale = 1.0 / (device_num_ * node_size_);
+  TensorScaleValue(place_, param_sync_, &param_sync_, scale);
+  PADDLE_ENFORCE_XPU_SUCCESS(xpu_wait(stream));
 #endif
+
+  box_ptr->DenseNcclTimer(device_id_, true, 0x01);
 }
 int BoxPSWorker::PackBatchTask(void) {
   device_reader_->AssignFeedVar(*thread_scope_);

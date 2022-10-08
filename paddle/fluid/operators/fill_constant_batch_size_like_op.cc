@@ -60,6 +60,55 @@ obtained from the `input` tensor.
   }
 };
 
+template <typename T>
+class FillConstantBatchSizeLikeOpKernel : public framework::OpKernel<T> {
+ public:
+  void Compute(const framework::ExecutionContext &ctx) const override {
+//    auto data_type =
+//        static_cast<framework::proto::VarType::Type>(ctx.Attr<int>("dtype"));
+    auto float_value = ctx.Attr<float>("value");
+    auto str_value = ctx.Attr<std::string>("str_value");
+
+    auto *out = ctx.Output<framework::LoDTensor>("Out");
+    auto *in = ctx.Input<framework::LoDTensor>("Input");
+    if (in->lod().size() && ctx.Attr<int>("input_dim_idx") == 0) {
+      // set the correct batch size for the LoDTensor.
+      auto odims = out->dims();
+      int output_dim_idx = ctx.Attr<int>("output_dim_idx");
+      odims[output_dim_idx] = static_cast<int>(in->lod().back().size()) - 1;
+      out->mutable_data<T>(odims, ctx.GetPlace());
+    }
+
+    T value;
+    if (str_value.empty()) {
+      value = static_cast<T>(float_value);
+    } else {
+      // handle NaN/Inf first, which cannot be read from stream.
+      if (str_value == "inf") {
+        value = static_cast<T>(std::numeric_limits<double>::infinity());
+      } else if (str_value == "-inf") {
+        value = static_cast<T>(-std::numeric_limits<double>::infinity());
+      } else if (str_value == "nan") {
+        value = static_cast<T>(std::numeric_limits<double>::quiet_NaN());
+      } else {
+        std::stringstream convert_stream(str_value);
+        if (std::is_same<int64_t, T>::value) {
+          int64_t tmp_value;
+          convert_stream >> tmp_value;
+          value = static_cast<T>(tmp_value);
+        } else {
+          double tmp_value;
+          convert_stream >> tmp_value;
+          value = static_cast<T>(tmp_value);
+        }
+      }
+    }
+    out->mutable_data<T>(ctx.GetPlace());
+    auto &dev_ctx = ctx.template device_context<phi::DeviceContext>();
+    phi::funcs::set_constant(dev_ctx, out, static_cast<T>(value));
+  }
+};
+
 }  // namespace operators
 }  // namespace paddle
 
@@ -75,3 +124,16 @@ REGISTER_OPERATOR(
     ops::FillConstantBatchSizeLikeOpMaker,
     ops::BatchSizeLikeNoNeedBufferVarsInferer,
     FillConstantBatchSizeLikeInferShapeFunctor);
+
+#ifdef PADDLE_WITH_XPU
+REGISTER_OP_XPU_KERNEL(
+    fill_constant_batch_size_like,
+    ops::FillConstantBatchSizeLikeOpKernel<float>,
+    ops::FillConstantBatchSizeLikeOpKernel<double>,
+    ops::FillConstantBatchSizeLikeOpKernel<uint8_t>,
+    ops::FillConstantBatchSizeLikeOpKernel<int16_t>,
+    ops::FillConstantBatchSizeLikeOpKernel<int>,
+    ops::FillConstantBatchSizeLikeOpKernel<int64_t>,
+    ops::FillConstantBatchSizeLikeOpKernel<bool>,
+    ops::FillConstantBatchSizeLikeOpKernel<paddle::platform::float16>);
+#endif
