@@ -67,15 +67,23 @@ void PrintLodTensorType(phi::DenseTensor* tensor,
                         std::string& out_val,  // NOLINT
                         char separator = ',',
                         bool need_leading_separator = true) {
+  auto count = tensor->numel();
+  if (start < 0 || end > count) {
+    VLOG(3) << "access violation";
+    out_val += "access violation";
+    return;
+  }
   if (start >= end) return;
-  const T *ptr = tensor->data<T>();
   if (!need_leading_separator) {
-    out_val += std::to_string(ptr[start]);
+    out_val += std::to_string(tensor->data<T>()[start]);
+    // os << tensor->data<T>()[start];
     start++;
   }
   for (int64_t i = start; i < end; i++) {
+    // os << ":" << tensor->data<T>()[i];
+    // os << separator << tensor->data<T>()[i];
     out_val += separator;
-    out_val += std::to_string(ptr[i]);
+    out_val += std::to_string(tensor->data<T>()[i]);
   }
 }
 
@@ -88,7 +96,11 @@ void PrintLodTensorType<float>(phi::DenseTensor* tensor,
                                std::string& out_val,  // NOLINT
                                char separator,
                                bool need_leading_separator) {
-  if (start >= end) {
+  char buf[MAX_FLOAT_BUFF_SIZE];
+  auto count = tensor->numel();
+  if (start < 0 || end > count) {
+    VLOG(3) << "access violation";
+    out_val += "access violation";
     return;
   }
   if (start >= end) return;
@@ -116,17 +128,14 @@ std::string PrintLodTensorIntType(phi::DenseTensor* tensor,
   if (start >= end) return "";
   std::ostringstream os;
   if (!need_leading_separator) {
-    format_string_append(&out_val, "%.9g", ptr[start]);
-    ++start;
+    os << static_cast<uint64_t>(tensor->data<int64_t>()[start]);
+    start++;
   }
   for (int64_t i = start; i < end; i++) {
-    const float &n = ptr[i];
-    if (n > -FLOAT_EPS && n < FLOAT_EPS) {
-      format_string_append(&out_val, "%c0", separator);
-    } else {
-      format_string_append(&out_val, "%c%.9g", separator, n);
-    }
+    // os << ":" << static_cast<uint64_t>(tensor->data<int64_t>()[i]);
+    os << separator << static_cast<uint64_t>(tensor->data<int64_t>()[i]);
   }
+  return os.str();
 }
 
 void PrintLodTensorIntType(phi::DenseTensor* tensor,
@@ -135,16 +144,24 @@ void PrintLodTensorIntType(phi::DenseTensor* tensor,
                            std::string& out_val,  // NOLINT
                            char separator = ',',
                            bool need_leading_separator = true) {
-  if (start >= end){
+  auto count = tensor->numel();
+  if (start < 0 || end > count) {
+    VLOG(3) << "access violation";
+    out_val += "access violation";
     return;
   }
-  const int64_t *ptr = tensor->data<int64_t>();
+  if (start >= end) return;
   if (!need_leading_separator) {
-    format_string_append(&out_val, "%lu", static_cast<uint64_t>(ptr[start]));
+    out_val +=
+        std::to_string(static_cast<uint64_t>(tensor->data<int64_t>()[start]));
     start++;
   }
   for (int64_t i = start; i < end; i++) {
-    format_string_append(&out_val, "%c%lu", separator, static_cast<uint64_t>(ptr[i]));
+    // os << ":" << static_cast<uint64_t>(tensor->data<int64_t>()[i]);
+    // os << separator << static_cast<uint64_t>(tensor->data<int64_t>()[i]);
+    out_val += separator;
+    out_val +=
+        std::to_string(static_cast<uint64_t>(tensor->data<int64_t>()[i]));
   }
 }
 
@@ -154,8 +171,20 @@ std::string PrintLodTensor(phi::DenseTensor* tensor,
                            char separator,
                            bool need_leading_separator) {
   std::string out_val;
-  PrintLodTensor(tensor, start, end,
-      out_val, separator, need_leading_separator);
+  if (framework::TransToProtoVarType(tensor->dtype()) == proto::VarType::FP32) {
+    out_val = PrintLodTensorType<float>(
+        tensor, start, end, separator, need_leading_separator);
+  } else if (framework::TransToProtoVarType(tensor->dtype()) ==
+             proto::VarType::INT64) {
+    out_val = PrintLodTensorIntType(
+        tensor, start, end, separator, need_leading_separator);
+  } else if (framework::TransToProtoVarType(tensor->dtype()) ==
+             proto::VarType::FP64) {
+    out_val = PrintLodTensorType<double>(
+        tensor, start, end, separator, need_leading_separator);
+  } else {
+    out_val = "unsupported type";
+  }
   return out_val;
 }
 
@@ -165,20 +194,22 @@ void PrintLodTensor(phi::DenseTensor* tensor,
                     std::string& out_val,  // NOLINT
                     char separator,
                     bool need_leading_separator) {
-  auto dtype = framework::TransToProtoVarType(tensor->dtype());
-  if (dtype == proto::VarType::FP32) {
-    PrintLodTensorFloatType(
+  if (framework::TransToProtoVarType(tensor->dtype()) == proto::VarType::FP32) {
+    PrintLodTensorType<float>(
         tensor, start, end, out_val, separator, need_leading_separator);
-  } else if (dtype == proto::VarType::INT64) {
+  } else if (framework::TransToProtoVarType(tensor->dtype()) ==
+             proto::VarType::INT64) {
     PrintLodTensorIntType(
         tensor, start, end, out_val, separator, need_leading_separator);
-  } else if (dtype == proto::VarType::FP64) {
+  } else if (framework::TransToProtoVarType(tensor->dtype()) ==
+             proto::VarType::FP64) {
     PrintLodTensorType<double>(
         tensor, start, end, out_val, separator, need_leading_separator);
   } else {
     out_val += "unsupported type";
   }
 }
+
 std::pair<int64_t, int64_t> GetTensorBound(LoDTensor* tensor, int index) {
   auto& dims = tensor->dims();
   if (tensor->lod().size() != 0) {
@@ -188,6 +219,7 @@ std::pair<int64_t, int64_t> GetTensorBound(LoDTensor* tensor, int index) {
     return {index * dims[1], (index + 1) * dims[1]};
   }
 }
+
 bool CheckValidOutput(LoDTensor* tensor, size_t batch_size) {
   auto& dims = tensor->dims();
   if (dims.size() != 2) return false;
