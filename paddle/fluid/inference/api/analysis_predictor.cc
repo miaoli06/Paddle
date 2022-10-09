@@ -2338,6 +2338,23 @@ void InternalUtils::SyncStream(cudaStream_t stream) {
   cudaStreamSynchronize(stream);
 #endif
 }
-
+bool InternalUtils::QueryStream(paddle_infer::Predictor* p) {
+#ifdef PADDLE_WITH_CUDA
+  auto *pred = dynamic_cast<paddle::AnalysisPredictor *>(p->predictor_.get());
+  paddle::platform::DeviceContextPool &pool =
+       paddle::platform::DeviceContextPool::Instance();
+  auto *dev_ctx = reinterpret_cast<phi::GPUContext *>(pool.Get(pred->place_));
+  return (cudaSuccess == cudaStreamQuery(dev_ctx->stream()));
+#else
+  return false;
+#endif
+}
+bool InternalUtils::QueryStream(cudaStream_t stream) {
+#ifdef PADDLE_WITH_CUDA
+  return (cudaSuccess == cudaStreamQuery(stream));
+#else
+  return false;
+#endif
+}
 }  // namespace experimental
 }  // namespace paddle_infer

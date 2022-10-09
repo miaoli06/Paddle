@@ -460,6 +460,8 @@ class PD_INFER_DECL InternalUtils {
   static void CopyToCpuWithIoStream(paddle_infer::Tensor* t,
                                     T* data,
                                     cudaStream_t stream);
+  static bool QueryStream(paddle_infer::Predictor* pred);
+  static bool QueryStream(cudaStream_t stream);
 };
 }  // namespace experimental
 }  // namespace paddle_infer
