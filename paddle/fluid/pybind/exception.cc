@@ -84,9 +84,9 @@ void BindException(pybind11::module* m) {
 
 void ThrowExceptionToPython(std::exception_ptr p) {
   static PyObject* EOFExceptionException =
-      PyErr_NewException((char *)"paddle.EOFException", PyExc_Exception, NULL);
+      PyErr_NewException("paddle.EOFException", PyExc_Exception, NULL);
   static PyObject* EnforceNotMetException =
-      PyErr_NewException((char *)"paddle.EnforceNotMet", PyExc_Exception, NULL);
+      PyErr_NewException("paddle.EnforceNotMet", PyExc_Exception, NULL);
   try {
     if (p) std::rethrow_exception(p);
   } catch (const platform::EOFException& e) {

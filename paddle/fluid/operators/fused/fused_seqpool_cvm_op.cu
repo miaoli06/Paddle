@@ -470,8 +470,8 @@ class FusedSeqpoolCVMCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     auto inputs = ctx.MultiInput<LoDTensor>("X");
-    auto outputs = ctx.MultiOutput<framework::Tensor>("Out");
-
+    auto outputs = ctx.MultiOutput<phi::DenseTensor>("Out");
+    auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
     const auto slot_size = inputs.size();
     std::vector<const float *> input_data(slot_size);
     std::vector<const size_t *> lods_data(slot_size);
@@ -545,7 +545,7 @@ class FusedSeqpoolCVMGradCUDAKernel : public framework::OpKernel<T> {
     auto out_grads = ctx.MultiInput<LoDTensor>(framework::GradVarName("Out"));
     auto in_grads = ctx.MultiOutput<LoDTensor>(framework::GradVarName("X"));
     auto *cvm = ctx.Input<LoDTensor>("CVM");
-
+    auto &dev_ctx = ctx.template device_context<phi::GPUContext>();
     std::string pooltype = ctx.Attr<std::string>("pooltype");
     auto use_cvm = ctx.Attr<bool>("use_cvm");
     const int cvm_offset = ctx.Attr<int>("cvm_offset");
@@ -581,7 +581,6 @@ class FusedSeqpoolCVMGradCUDAKernel : public framework::OpKernel<T> {
       in_grads_data[i] =
           reinterpret_cast<T *>(in_grad->mutable_data<T>(place));
       lods_data[i] = gpu_lods[i].mutable_data<size_t>(place, lod_data);
-      
       cvm_data[i] = reinterpret_cast<const T *>(cvm->data<T>());
     }
     FusedSeqpoolCVMGrad(place, out_grads_data, in_grads_data, cvm_data,

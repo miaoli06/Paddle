@@ -19,17 +19,17 @@ from typing import Dict, Any, List, Tuple
 from tests import is_attr, is_input, is_output, is_vec
 
 
-def to_named_dict(items):
+def to_named_dict(items: List[Dict]) -> Dict[str, Dict]:
     named_dict = {}
     for item in items:
         if "name" not in item:
-            raise KeyError("name not in {item}")
+            raise KeyError(f"name not in {item}")
         name = item["name"]
         named_dict[name] = item
     return named_dict
 
 
-def parse_arg(api_name, s):
+def parse_arg(api_name: str, s: str) -> Dict[str, str]:
     """parse an argument in following formats:
     1. typename name
     2. typename name = default_value
@@ -37,18 +37,18 @@ def parse_arg(api_name, s):
     typename, rest = [item.strip() for item in s.split(" ", 1)]
     assert len(
         typename
-    ) > 0, ("The arg typename should not be empty. Please check the args of %s in yaml." % (api_name))
+    ) > 0, f"The arg typename should not be empty. Please check the args of {api_name} in yaml."
 
     assert rest.count(
-        "=") <= 1, ("There is more than 1 = in an arg in %s" % (api_name))
+        "=") <= 1, f"There is more than 1 = in an arg in {api_name}"
     if rest.count("=") == 1:
         name, default_value = [item.strip() for item in rest.split("=", 1)]
         assert len(
             name
-        ) > 0, ("The arg name should not be empty. Please check the args of %s in yaml." % (api_name))
+        ) > 0, f"The arg name should not be empty. Please check the args of {api_name} in yaml."
         assert len(
             default_value
-        ) > 0, ("The default value should not be empty. Please check the args of %s in yaml." % (api_name))
+        ) > 0, f"The default value should not be empty. Please check the args of {api_name} in yaml."
         return {
             "typename": typename,
             "name": name,
@@ -58,15 +58,16 @@ def parse_arg(api_name, s):
         name = rest.strip()
         assert len(
             name
-        ) > 0, ("The arg name should not be empty. Please check the args of %s in yaml." % (api_name))
+        ) > 0, f"The arg name should not be empty. Please check the args of {api_name} in yaml."
         return {"typename": typename, "name": name}
 
 
-def parse_input_and_attr(api_name, arguments):
+def parse_input_and_attr(api_name: str,
+                         arguments: str) -> Tuple[List, List, Dict, Dict]:
     args_str = arguments.strip()
     assert args_str.startswith('(') and args_str.endswith(')'), \
-        ("Args declaration should start with '(' and end with ')', "
-         "please check the args of {api_name} in yaml.")
+        (f"Args declaration should start with '(' and end with ')', "
+         f"please check the args of {api_name} in yaml.")
     args_str = args_str[1:-1]
     args = parse_plain_list(args_str)
 
@@ -81,22 +82,22 @@ def parse_input_and_attr(api_name, arguments):
         name = item["name"]
         if is_input(typename):
             assert len(attrs) == 0, \
-                ("The input Tensor should appear before attributes. "
-                "please check the position of {api_name}:input({name}) "
-                "in yaml.")
+                (f"The input Tensor should appear before attributes. "
+                f"please check the position of {api_name}:input({name}) "
+                f"in yaml.")
             inputs.append(item)
         elif is_attr(typename):
             if met_attr_with_default_value:
-                assert "default_value" in item, "{api_name}: Arguments with default value should not precede those without default value"
+                assert "default_value" in item, f"{api_name}: Arguments with default value should not precede those without default value"
             elif "default_value" in item:
                 met_attr_with_default_value = True
             attrs.append(item)
         else:
-            raise KeyError("{api_name}: Invalid argument type {typename}.")
+            raise KeyError(f"{api_name}: Invalid argument type {typename}.")
     return inputs, attrs
 
 
-def parse_output(api_name, s):
+def parse_output(api_name: str, s: str) -> Dict[str, str]:
     """parse an output, typename or typename(name)."""
     match = re.search(
         r"(?P<out_type>[a-zA-Z0-9_[\]]+)\s*(?P<name>\([a-zA-Z0-9_@]+\))?\s*(?P<expr>\{[^\}]+\})?",
@@ -109,18 +110,18 @@ def parse_output(api_name, s):
     size_expr = size_expr[1:-1] if size_expr is not None else None
 
     assert is_output(typename), \
-        ("Invalid output type: {typename} in api: {api_name}."
-            "Supported types are Tensor and Tensor[]")
+        (f"Invalid output type: {typename} in api: {api_name}."
+            f"Supported types are Tensor and Tensor[]")
     if size_expr is not None:
         assert is_vec(typename), \
-            ("Invalid output size: output {name} in api: {api_name} is "
-             "not a vector but has size expr")
+            (f"Invalid output size: output {name} in api: {api_name} is "
+             f"not a vector but has size expr")
         return {"typename": typename, "name": name, "size": size_expr}
     else:
         return {"typename": typename, "name": name}
 
 
-def parse_outputs(api_name, outputs):
+def parse_outputs(api_name: str, outputs: str) -> List[Dict]:
     outputs = parse_plain_list(outputs, sep=",")
     output_items = []
     for output in outputs:
@@ -128,14 +129,14 @@ def parse_outputs(api_name, outputs):
     return output_items
 
 
-def parse_infer_meta(infer_meta):
+def parse_infer_meta(infer_meta: Dict[str, Any]) -> Dict[str, Any]:
     infer_meta = copy(infer_meta)  # to prevent mutating the input
     if "param" not in infer_meta:
         infer_meta["param"] = None
     return infer_meta
 
 
-def parse_candidates(s):
+def parse_candidates(s: str) -> Dict[str, Any]:
     "parse candidates joined by either '>'(ordered) or ','(unordered)"
     delimiter = ">" if ">" in s else ","
     ordered = delimiter == ">"
@@ -143,12 +144,13 @@ def parse_candidates(s):
     return {"ordered": ordered, "candidates": candidates}
 
 
-def parse_plain_list(s, sep=","):
+def parse_plain_list(s: str, sep=",") -> List[str]:
     items = [item.strip() for item in s.strip().split(sep)]
     return items
 
 
-def parse_kernel(api_name, kernel_config):
+def parse_kernel(api_name: str, kernel_config: Dict[str,
+                                                    Any]) -> Dict[str, Any]:
     # kernel :
     #    func : [], Kernel functions (example: scale, scale_sr)
     #    param : [], Input params of kernel
@@ -177,7 +179,7 @@ def parse_kernel(api_name, kernel_config):
     return kernel
 
 
-def parse_inplace(api_name, inplace_cfg):
+def parse_inplace(api_name: str, inplace_cfg: str) -> Dict[str, str]:
     inplace_map = {}
     inplace_cfg = inplace_cfg.lstrip("(").rstrip(")")
     pairs = parse_plain_list(inplace_cfg)
@@ -187,7 +189,7 @@ def parse_inplace(api_name, inplace_cfg):
     return inplace_map
 
 
-def parse_invoke(api_name, invoke_config):
+def parse_invoke(api_name: str, invoke_config: str) -> Dict[str, Any]:
     invoke_config = invoke_config.strip()
     func, rest = invoke_config.split("(", 1)
     func = func.strip()
@@ -196,7 +198,7 @@ def parse_invoke(api_name, invoke_config):
     return invocation
 
 
-def extract_type_and_name(records):
+def extract_type_and_name(records: List[Dict]) -> List[Dict]:
     """extract type and name from forward call, it is simpler than forward api."""
     extracted = [{
         "name": item["name"],
@@ -205,12 +207,12 @@ def extract_type_and_name(records):
     return extracted
 
 
-def parse_forward(api_name, forward_config):
+def parse_forward(api_name: str, forward_config: str) -> Dict[str, Any]:
     # api_name (const Tensor& input, ... , int attr, ...) -> Tensor(out)
     result = re.search(
-        r"(?P<api>[a-z][a-z0-9_]+)\s*(?P<args>\([^\)]+\))\s*->\s*(?P<outputs>.+)",
+        r"(?P<op>[a-z][a-z0-9_]+)\s*(?P<args>\([^\)]+\))\s*->\s*(?P<outputs>.+)",
         forward_config)
-    api = result.group("api")
+    api = result.group("op")
     outputs = parse_outputs(api_name, result.group("outputs"))
     outputs = extract_type_and_name(outputs)
 
@@ -226,7 +228,7 @@ def parse_forward(api_name, forward_config):
     return forward_cfg
 
 
-def parse_api_entry(api_entry, name_field="api"):
+def parse_api_entry(api_entry: Dict[str, Any], name_field="op"):
     api_name = api_entry[name_field]
     inputs, attrs = parse_input_and_attr(api_name, api_entry["args"])
     outputs = parse_outputs(api_name, api_entry["output"])
@@ -237,12 +239,12 @@ def parse_api_entry(api_entry, name_field="api"):
             typename = attr["typename"]
             default_value = attr["default_value"]
             if typename == "DataType":
-                assert "DataType" in default_value, "invalid DataType default value in {api_name}"
+                assert "DataType" in default_value, f"invalid DataType default value in {api_name}"
                 # remove namespace
                 default_value = default_value[default_value.find("DataType"):]
                 attr["default_value"] = default_value
             elif typename == "DataLayout":
-                assert "DataLayout" in default_value, "invalid DataLayout default value in {api_name}"
+                assert "DataLayout" in default_value, f"invalid DataLayout default value in {api_name}"
                 default_value = default_value[default_value.find("DataLayout"):]
                 attr["default_value"] = default_value
 
@@ -256,7 +258,7 @@ def parse_api_entry(api_entry, name_field="api"):
     if "optional" in api_entry:
         optional_args = parse_plain_list(api_entry["optional"])
         for name in optional_args:
-            assert name in input_names, "{api_name} has an optional input: '{name}' which is not an input."
+            assert name in input_names, f"{api_name} has an optional input: '{name}' which is not an input."
         for input in inputs:
             if input["name"] in optional_args:
                 input["optional"] = True
@@ -267,7 +269,7 @@ def parse_api_entry(api_entry, name_field="api"):
     if "intermediate" in api_entry:
         intermediate_outs = parse_plain_list(api_entry["intermediate"])
         for name in intermediate_outs:
-            assert name in output_names, "{api_name} has an intermediate output: '{name}' which is not an output."
+            assert name in output_names, f"{api_name} has an intermediate output: '{name}' which is not an output."
         for output in outputs:
             if output["name"] in intermediate_outs:
                 output["intermediate"] = True
@@ -278,7 +280,7 @@ def parse_api_entry(api_entry, name_field="api"):
     if "no_need_buffer" in api_entry:
         no_buffer_args = parse_plain_list(api_entry["no_need_buffer"])
         for name in no_buffer_args:
-            assert name in input_names, "{api_name} has an no buffer input: '{name}' which is not an input."
+            assert name in input_names, f"{api_name} has an no buffer input: '{name}' which is not an input."
         for input in inputs:
             if input["name"] in no_buffer_args:
                 input["no_need_buffer"] = True
@@ -332,7 +334,7 @@ def parse_api_entry(api_entry, name_field="api"):
     api["backward"] = backward
 
     # forward for backward_apis
-    is_backward_api = name_field == "backward_api"
+    is_backward_api = name_field == "backward_op"
     if is_backward_api:
         if "forward" in api_entry:
             forward = parse_forward(api_name, api_entry["forward"])
@@ -355,7 +357,7 @@ def validate_backward_attrs(api, forward_attrs, backward_attrs):
     # than the forward api, as long as they all have default value
     for i in range(-num_exceptional_attrs, 0):
         assert "default_value" in backward_attrs[
-            i], "{api} has exceptional attr without default value"
+            i], f"{api} has exceptional attr without default value"
 
 
 def validate_backward_inputs(api, forward_inputs, forward_outputs,
@@ -365,12 +367,12 @@ def validate_backward_inputs(api, forward_inputs, forward_outputs,
     backward_input_names = [item["name"] for item in backward_inputs]
 
     assert len(backward_input_names) <= len(foward_input_names) + 2 * len(
-        forward_output_names), "{api} has too many inputs."
+        forward_output_names), f"{api} has too many inputs."
 
 
 def validate_backward_outputs(api, forward_inputs, backward_outputs):
     assert len(backward_outputs) <= len(
-        forward_inputs), "{api} has too many outputs"
+        forward_inputs), f"{api} has too many outputs"
 
 
 def cross_validate(apis):
@@ -380,42 +382,42 @@ def cross_validate(apis):
             fw_name = fw_call["name"]
             if fw_name not in apis:
                 print(
-                    "Something Wrong here, this backward api({name})'s forward api({fw_name}) does not exist."
+                    f"Something Wrong here, this backward api({name})'s forward api({fw_name}) does not exist."
                 )
             else:
                 fw_api = apis[fw_name]
                 if "backward" not in fw_api or fw_api["backward"] is None:
                     print(
-                        "Something Wrong here, {name}'s forward api({fw_name}) does not claim {name} as its backward."
+                        f"Something Wrong here, {name}'s forward api({fw_name}) does not claim {name} as its backward."
                     )
                 else:
                     assert fw_api[
-                        "backward"] == name, "{name}: backward and forward name mismatch"
+                        "backward"] == name, f"{name}: backward and forward name mismatch"
 
                 assert len(fw_call["inputs"]) <= len(
                     fw_api["inputs"]
-                ), "{name}: forward call has more inputs than the api"
+                ), f"{name}: forward call has more inputs than the api"
                 for (input, input_) in zip(fw_call["inputs"], fw_api["inputs"]):
                     assert input["typename"] == input_[
-                        "typename"], "type mismatch in {name} and {fw_name}"
+                        "typename"], f"type mismatch in {name} and {fw_name}"
 
                 assert len(fw_call["attrs"]) <= len(
                     fw_api["attrs"]
-                ), "{name}: forward call has more attrs than the api"
+                ), f"{name}: forward call has more attrs than the api"
                 for (attr, attr_) in zip(fw_call["attrs"], fw_api["attrs"]):
                     if attr["typename"] == "Scalar":
                         # special case for Scalar, fw_call can omit the type
                         assert re.match(
                             r"Scalar(\(\w+\))*", attr_["typename"]
-                        ), "type mismatch in {name} and {fw_name}"
+                        ), f"type mismatch in {name} and {fw_name}"
                     else:
                         assert attr["typename"] == attr_[
-                            "typename"], "type mismatch in {name} and {fw_name}"
+                            "typename"], f"type mismatch in {name} and {fw_name}"
 
                 assert len(fw_call["outputs"]) == len(
                     fw_api["outputs"]
-                ), "{name}: forward call has more outputs than the api"
+                ), f"{name}: forward call has more outputs than the api"
                 for (output, output_) in zip(fw_call["outputs"],
                                              fw_api["outputs"]):
                     assert output["typename"] == output_[
-                        "typename"], "type mismatch in {name} and {fw_name}"
+                        "typename"], f"type mismatch in {name} and {fw_name}"

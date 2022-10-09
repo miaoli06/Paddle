@@ -18,6 +18,8 @@ import argparse
 
 from api_gen import ForwardAPI
 
+kernel_func_set = set()
+
 
 def get_wrapped_infermeta_name(api_name):
     return api_name.capitalize() + 'InferMeta'
@@ -25,10 +27,13 @@ def get_wrapped_infermeta_name(api_name):
 
 def gene_wrapped_infermeta_and_register(api):
     if api.is_base_api and not api.is_dygraph_api:
-        register_code = ("""
-PD_REGISTER_INFER_META_FN({}, phi::{});""").format(api.kernel['func'][0], api.infer_meta['func'])
+        register_code = f"""
+PD_REGISTER_INFER_META_FN({api.kernel['func'][0]}, phi::{api.infer_meta['func']});"""
 
         if api.infer_meta['param'] is not None:
+            if api.kernel['func'][0] in kernel_func_set:
+                return '', '', ''
+
             kernel_params = api.kernel['param']
             if kernel_params is None:
                 kernel_params = api.inputs['names'] + api.attrs['names']
@@ -36,13 +41,14 @@ PD_REGISTER_INFER_META_FN({}, phi::{});""").format(api.kernel['func'][0], api.in
                 return '', '', register_code
 
             assert len(api.infer_meta['param']) <= len(kernel_params), \
-                 ("{} api: Parameters error. The params of infer_meta should be a subset of kernel params.").format(api.api)
+                 f"{api.api} api: Parameters error. The params of infer_meta should be a subset of kernel params."
 
             tensor_type_map = {
                 'const Tensor&': 'const MetaTensor&',
-                'const std::vector<Tensor>&': 'const std::vector<MetaTensor>&',
+                'const std::vector<Tensor>&':
+                'const std::vector<const MetaTensor*>&',
                 'Tensor': 'MetaTensor*',
-                'std::vector<Tensor>': 'std::vector<MetaTensor>*',
+                'std::vector<Tensor>': 'std::vector<MetaTensor*>',
                 'const paddle::optional<Tensor>&': 'const MetaTensor&'
             }
 
@@ -65,20 +71,20 @@ PD_REGISTER_INFER_META_FN({}, phi::{});""").format(api.kernel['func'][0], api.in
             invoke_param = api.infer_meta['param']
             invoke_param.extend(api.outputs['names'])
 
-            declare_code = ("""
-void {}({});
-""").format(wrapped_infermeta_name, ", ".join(args))
+            declare_code = f"""
+void {wrapped_infermeta_name}({", ".join(args)});
+"""
 
-            defind_code = ("""
-void {}({}) {{
-  {}({});
+            defind_code = f"""
+void {wrapped_infermeta_name}({", ".join(args)}) {{
+  {api.infer_meta['func']}({", ".join(invoke_param)});
 }}
-""").format(wrapped_infermeta_name, ", ".join(args), api.infer_meta['func'], ", ".join(invoke_param))
+"""
 
-            register_code = ("""
-PD_REGISTER_INFER_META_FN({}, phi::{});""").format(
-    api.kernel['func'][0], get_wrapped_infermeta_name(api.kernel['func'][0]))
+            register_code = f"""
+PD_REGISTER_INFER_META_FN({api.kernel['func'][0]}, phi::{get_wrapped_infermeta_name(api.kernel['func'][0])});"""
 
+            kernel_func_set.add(api.kernel['func'][0])
             return declare_code, defind_code, register_code
         else:
             return '', '', register_code
@@ -95,15 +101,15 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return ("""
-#include "{}"
+    return f"""
+#include "{header_file_path}"
 #include "paddle/phi/core/infermeta_utils.h"
 #include "paddle/phi/infermeta/binary.h"
 #include "paddle/phi/infermeta/multiary.h"
 #include "paddle/phi/infermeta/nullary.h"
 #include "paddle/phi/infermeta/unary.h"
 #include "paddle/phi/infermeta/ternary.h"
-""").format(header_file_path)
+"""
 
 
 def api_namespace():
@@ -162,7 +168,7 @@ def main():
     parser.add_argument('--api_yaml_path',
                         help='path to api yaml file',
                         nargs='+',
-                        default='paddle/phi/api/yaml/api.yaml')
+                        default='paddle/phi/api/yaml/ops.yaml')
     parser.add_argument(
         '--wrapped_infermeta_header_path',
         help='output of generated wrapped_infermeta header code file',

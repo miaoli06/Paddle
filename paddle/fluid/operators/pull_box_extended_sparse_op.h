@@ -25,9 +25,9 @@ namespace operators {
 template<typename T>
 static void PullBoxExtendedSparseFunctor(
     const framework::ExecutionContext &ctx) {
-  auto inputs = ctx.MultiInput<framework::Tensor>("Ids");
-  auto outputs = ctx.MultiOutput<framework::Tensor>("Out");
-  auto outputs_extend = ctx.MultiOutput<framework::Tensor>("OutExtend");
+  auto inputs = ctx.MultiInput<phi::DenseTensor>("Ids");
+  auto outputs = ctx.MultiOutput<phi::DenseTensor>("Out");
+  auto outputs_extend = ctx.MultiOutput<phi::DenseTensor>("OutExtend");
   auto flags = ctx.Attr<std::vector<int>>("mask");
 
   const auto slot_size = inputs.size();
@@ -88,9 +88,9 @@ template<typename T>
 static void PushBoxExtendedSparseFunctor(
     const framework::ExecutionContext &ctx) {
   auto inputs = ctx.MultiInput<framework::LoDTensor>("Ids");
-  auto d_output = ctx.MultiInput<framework::Tensor>(
+  auto d_output = ctx.MultiInput<phi::DenseTensor>(
       framework::GradVarName("Out"));
-  auto d_output_extend = ctx.MultiInput<framework::Tensor>(
+  auto d_output_extend = ctx.MultiInput<phi::DenseTensor>(
       framework::GradVarName("OutExtend"));
   auto flags = ctx.Attr<std::vector<int>>("mask");
 

@@ -517,13 +517,13 @@ struct Loader {
     kps::Init<Type, ArgsT, Index, VecSize>(
         args, static_cast<Type>(1.0f), read_lens);
     if (is_boundary) {
-      kps::ReadData<Type, VecSize, 1, 1, ArgsT, Index, true>(
+      kps::ReadData<Type, VecSize, 1, ArgsT, Index, true>(
           args,
           reinterpret_cast<const _ptr_ Type *>(in[Index]) + offset,
           num,
           read_lens);
     } else {
-      kps::ReadData<Type, VecSize, 1, 1, ArgsT, Index, false>(
+      kps::ReadData<Type, VecSize, 1, ArgsT, Index, false>(
           args,
           reinterpret_cast<const _ptr_ Type *>(in[Index]) + offset,
           num,
@@ -593,7 +593,7 @@ struct ElementwisePrimitiveCaller<InT, OutT, VecSize, Functor, Arity, true> {
                                     InT (*args)[VecSize],
                                     OutT *result,
                                     int read_lens) {
-    kps::ElementwiseAny<InT, OutT, VecSize, 1, 1, Arity, Functor>(
+    kps::ElementwiseAny<InT, OutT, VecSize, 1, Arity, Functor>(
         result, args, func);
   }
 };
@@ -604,7 +604,7 @@ struct ElementwisePrimitiveCaller<InT, OutT, VecSize, Functor, 0, false> {
                                     InT (*args)[VecSize],
                                     OutT *result,
                                     int read_lens) {
-    kps::ElementwiseConstant<InT, OutT, VecSize, 1, 1, Functor>(result, func);
+    kps::ElementwiseConstant<InT, OutT, VecSize, 1, Functor>(result, func);
   }
 };
 
@@ -614,7 +614,7 @@ struct ElementwisePrimitiveCaller<InT, OutT, VecSize, Functor, 1, false> {
                                     InT (*args)[VecSize],
                                     OutT *result,
                                     int read_lens) {
-    kps::ElementwiseUnary<InT, OutT, VecSize, 1, 1, Functor>(
+    kps::ElementwiseUnary<InT, OutT, VecSize, 1, Functor>(
         result, args[0], func);
   }
 };
@@ -625,7 +625,7 @@ struct ElementwisePrimitiveCaller<InT, OutT, VecSize, Functor, 2, false> {
                                     InT (*args)[VecSize],
                                     OutT *result,
                                     int read_lens) {
-    kps::ElementwiseBinary<InT, OutT, VecSize, 1, 1, Functor>(
+    kps::ElementwiseBinary<InT, OutT, VecSize, 1, Functor>(
         result, args[0], args[1], func, read_lens);
   }
 };
@@ -636,7 +636,7 @@ struct ElementwisePrimitiveCaller<InT, OutT, VecSize, Functor, 3, false> {
                                     InT (*args)[VecSize],
                                     OutT *result,
                                     int read_lens) {
-    kps::ElementwiseTernary<InT, OutT, VecSize, 1, 1, Functor>(
+    kps::ElementwiseTernary<InT, OutT, VecSize, 1, Functor>(
         result, args[0], args[1], args[2], func);
   }
 };
@@ -701,7 +701,7 @@ struct ElementwiseWriteDataCallerBc {
     }
 #pragma unroll
     for (int i = 0; i < NumOuts; ++i) {
-      kps::WriteData<OutT, VecSize, 1, 1, IsBoundary>(
+      kps::WriteData<OutT, VecSize, 1, IsBoundary>(
           outs[i] + block_offset, dst[i], num, read_lens);
     }
   }
@@ -714,7 +714,7 @@ struct ElementwiseWriteDataCallerBc<OutT, VecSize, IsBoundary, 1> {
                                              kps::IndexType block_offset,
                                              int num,
                                              int read_lens) {
-    kps::WriteData<OutT, VecSize, 1, 1, IsBoundary>(
+    kps::WriteData<OutT, VecSize, 1, IsBoundary>(
         outs[0] + block_offset, src, num, read_lens);
   }
 };

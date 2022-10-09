@@ -34,78 +34,68 @@ template <typename DeviceContext, typename T>
 struct TransposeNormal {
   // for dims >= 7 situation
   void operator()(const DeviceContext& context,
-                  const paddle::framework::Tensor& in,
-                  paddle::framework::Tensor* out,
+                  const phi::DenseTensor& in,
+                  phi::DenseTensor* out,
                   const std::vector<int>& axis);
 };
 
 template <typename DeviceContext, typename T, int Rank>
 struct Transpose {
   void operator()(const DeviceContext& context,
-                  const paddle::framework::Tensor& in,
-                  paddle::framework::Tensor* out,
+                  const phi::DenseTensor& in,
+                  phi::DenseTensor* out,
                   const std::vector<int>& axis);
 };
 
 template <typename DeviceContext, typename T>
 struct SetConstant {
   void operator()(const DeviceContext& context,
-                  paddle::framework::Tensor* tensor,
+                  phi::DenseTensor* tensor,
                   T num);
 };
 
 template <typename Place>
 void set_constant_with_place(const paddle::platform::DeviceContext& context,
-                             paddle::framework::Tensor* tensor,
+                             phi::DenseTensor* tensor,
                              const void* value);
 
 void set_constant(const paddle::platform::DeviceContext& context,
-                  paddle::framework::Tensor* tensor,
+                  phi::DenseTensor* tensor,
                   const void* value);
 template <typename T>
 void set_constant(const paddle::platform::DeviceContext& context,
-        paddle::framework::Tensor* tensor, const T value) {
+        phi::DenseTensor* tensor, const T value) {
   set_constant(context, tensor, reinterpret_cast<const void*>(&value));
 }
-
 
 template <typename DeviceContext, typename T>
 struct RowwiseAdd {
   void operator()(const DeviceContext& context,
-                  const paddle::framework::Tensor& input,
-                  const paddle::framework::Tensor& vec,
-                  paddle::framework::Tensor* output);
-};
-
-template <typename DeviceContext, typename T>
-struct ElementwiseAddTo {
-  // dst = dst + src
-  void operator()(DeviceContext* ctx,
-                  const paddle::framework::Tensor& src,
-                  paddle::framework::Tensor* dst);
+                  const phi::DenseTensor& input,
+                  const phi::DenseTensor& vec,
+                  phi::DenseTensor* output);
 };
 
 template <typename DeviceContext, typename T>
 struct ColwiseSum {
   void operator()(const DeviceContext& context,
-                  const paddle::framework::Tensor& input,
-                  paddle::framework::Tensor* vec);
+                  const phi::DenseTensor& input,
+                  phi::DenseTensor* vec);
 };
 
 template <typename DeviceContext, typename T>
 struct RowwiseSum {
   void operator()(const DeviceContext& context,
-                  const paddle::framework::Tensor& input,
-                  paddle::framework::Tensor* vec);
+                  const phi::DenseTensor& input,
+                  phi::DenseTensor* vec);
 };
 
 template <typename DeviceContext, typename T>
 struct RowwiseMean {
   void operator()(const DeviceContext& context,
-                  const paddle::framework::Tensor& input,
-                  paddle::framework::Tensor* vec);
+                  const phi::DenseTensor& input,
+                  phi::DenseTensor* vec);
 };
-
 template <typename Context, typename T>
 inline void TransCompute(const int dim,
                          const Context& dev_ctx,

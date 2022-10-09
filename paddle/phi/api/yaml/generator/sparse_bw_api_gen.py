@@ -67,24 +67,22 @@ class SparseBackwardAPI(SparseAPI, BackwardAPI):
             inplace_assign = " = " + self.inplace_map[self.outputs['names'][
                 0]] if inplace_flag and self.inplace_map is not None and self.outputs[
                     'names'][0] in self.inplace_map else ""
-            output_create = ("""
-    auto kernel_out = SetSparseKernelOutput({}, {});""").format(
-        self.outputs['names'][0], output_type_map[out_dtype_list[0]])
+            output_create = f"""
+    auto kernel_out = SetSparseKernelOutput({self.outputs['names'][0]}, {output_type_map[out_dtype_list[0]]});"""
 
         elif len(out_dtype_list) > 1:
             output_create = ""
 
             for i, out_type_item in enumerate(out_dtype_list):
-                kernel_output.append(('kernel_out_{}').format(i))
-                output_names.append(('kernel_out_{}').format(i))
+                kernel_output.append(f'kernel_out_{i}')
+                output_names.append(f'kernel_out_{i}')
                 if inplace_flag and self.inplace_map is not None and self.outputs[
                         'names'][i] in self.inplace_map:
-                    output_create = output_create + ("""
-    *{} = {};""").format(self.outputs['names'][i], self.inplace_map[self.outputs['names'][i]])
+                    output_create = output_create + f"""
+    *{self.outputs['names'][i]} = {self.inplace_map[self.outputs['names'][i]]};"""
 
-                output_create = output_create + ("""
-    auto kernel_out_{} = SetSparseKernelOutput({}, {});""").format(
-        i, self.outputs['names'][i], output_type_map[out_dtype_list[i]])
+                output_create = output_create + f"""
+    auto kernel_out_{i} = SetSparseKernelOutput({self.outputs['names'][i]}, {output_type_map[out_dtype_list[i]]});"""
 
         else:
             raise ValueError(
@@ -104,8 +102,8 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return ("""
-#include "{}"
+    return f"""
+#include "{header_file_path}"
 #include <memory>
 
 #include "glog/logging.h"
@@ -113,9 +111,16 @@ def source_include(header_file_path):
 #include "paddle/phi/api/include/sparse_api.h"
 #include "paddle/phi/api/lib/api_gen_utils.h"
 #include "paddle/phi/api/lib/kernel_dispatch.h"
-#include "paddle/phi/api/lib/sparse_api_custom_impl.h"
 #include "paddle/phi/core/kernel_registry.h"
-""").format(header_file_path)
+
+#include "paddle/phi/infermeta/unary.h"
+#include "paddle/phi/infermeta/binary.h"
+#include "paddle/phi/infermeta/backward.h"
+
+#include "paddle/phi/infermeta/sparse/unary.h"
+#include "paddle/phi/infermeta/sparse/binary.h"
+#include "paddle/phi/infermeta/sparse/backward.h"
+"""
 
 
 def api_namespace():
@@ -166,7 +171,7 @@ def main():
         description='Generate PaddlePaddle C++ Sparse API files')
     parser.add_argument('--api_yaml_path',
                         help='path to sparse api yaml file',
-                        default='paddle/phi/api/yaml/sparse_bw_api.yaml')
+                        default='paddle/phi/api/yaml/sparse_backward.yaml')
 
     parser.add_argument('--api_header_path',
                         help='output of generated api header code file',

@@ -67,8 +67,8 @@ ExternalProject_Add(
              -DCMAKE_BUILD_TYPE=${THIRD_PARTY_BUILD_TYPE}
              -DCMAKE_PREFIX_PATH=${prefix_path}
              -DWITH_GLOG=ON
-             -DIOBUF_WITH_HUGE_BLOCK=ON
-             -DBRPC_WITH_RDMA=${WITH_BRPC_RDMA}
+             -DBUILD_BRPC_TOOLS=ON
+             -DBUILD_SHARED_LIBS=ON
              ${EXTERNAL_OPTIONAL_ARGS}
   LIST_SEPARATOR |
   CMAKE_CACHE_ARGS

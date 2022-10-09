@@ -23,8 +23,7 @@ limitations under the License. */
 
 namespace paddle {
 namespace operators {
-using framework::Tensor;
-
+using Tensor = phi::DenseTensor;
 const int CUDA_NUM_THREADS = 1024;
 static inline int GET_BLOCKS(const int N) {
   return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;

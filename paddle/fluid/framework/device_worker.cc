@@ -36,21 +36,35 @@ void DeviceWorker::SetRootScope(Scope* root_scope) { root_scope_ = root_scope; }
 void DeviceWorker::SetDataFeed(DataFeed* data_feed) {
   device_reader_ = data_feed;
 }
-template<class... ARGS>
-void format_string_append(std::string* str,
-    const char* fmt, ARGS && ... args) { // use VA_ARGS may be better ?
-    int len = snprintf(NULL, 0, fmt, args...);
-    PADDLE_ENFORCE(len >= 0, "format args length error");
-    size_t oldlen = str->length();
-    str->resize(oldlen + len + 1);
-    PADDLE_ENFORCE(snprintf(&(*str)[oldlen], (size_t)len + 1, fmt, args...) == len);
-    str->resize(oldlen + len);
+
+template <typename T>
+std::string PrintLodTensorType(phi::DenseTensor* tensor,
+                               int64_t start,
+                               int64_t end,
+                               char separator = ',',
+                               bool need_leading_separator = true) {
+  auto count = tensor->numel();
+  if (start < 0 || end > count) {
+    VLOG(3) << "access violation";
+    return "access violation";
+  }
+  if (start >= end) return "";
+  std::ostringstream os;
+  if (!need_leading_separator) {
+    os << tensor->data<T>()[start];
+    start++;
+  }
+  for (int64_t i = start; i < end; i++) {
+    // os << ":" << tensor->data<T>()[i];
+    os << separator << tensor->data<T>()[i];
+  }
+  return os.str();
 }
 template <typename T>
-void PrintLodTensorType(Tensor* tensor,
+void PrintLodTensorType(phi::DenseTensor* tensor,
                         int64_t start,
                         int64_t end,
-                        std::string& out_val,
+                        std::string& out_val,  // NOLINT
                         char separator = ',',
                         bool need_leading_separator = true) {
   if (start >= end) return;
@@ -66,18 +80,41 @@ void PrintLodTensorType(Tensor* tensor,
 }
 
 #define FLOAT_EPS 1e-8
-#define MAX_NUM_BUFF_SIZE 40
-void PrintLodTensorFloatType(Tensor* tensor,
+#define MAX_FLOAT_BUFF_SIZE 40
+template <>
+void PrintLodTensorType<float>(phi::DenseTensor* tensor,
                                int64_t start,
                                int64_t end,
-                               std::string& out_val,
+                               std::string& out_val,  // NOLINT
                                char separator,
                                bool need_leading_separator) {
   if (start >= end) {
     return;
   }
-
-  const float *ptr = tensor->data<float>();
+  if (start >= end) return;
+  for (int64_t i = start; i < end; i++) {
+    if (i != start || need_leading_separator) out_val += separator;
+    if (tensor->data<float>()[i] > -FLOAT_EPS &&
+        tensor->data<float>()[i] < FLOAT_EPS) {
+      out_val += "0";
+    } else {
+      sprintf(buf, "%.9f", tensor->data<float>()[i]);  // NOLINT
+      out_val += buf;
+    }
+  }
+}
+std::string PrintLodTensorIntType(phi::DenseTensor* tensor,
+                                  int64_t start,
+                                  int64_t end,
+                                  char separator = ',',
+                                  bool need_leading_separator = true) {
+  auto count = tensor->numel();
+  if (start < 0 || end > count) {
+    VLOG(3) << "access violation";
+    return "access violation";
+  }
+  if (start >= end) return "";
+  std::ostringstream os;
   if (!need_leading_separator) {
     format_string_append(&out_val, "%.9g", ptr[start]);
     ++start;
@@ -91,10 +128,11 @@ void PrintLodTensorFloatType(Tensor* tensor,
     }
   }
 }
-void PrintLodTensorIntType(Tensor* tensor,
+
+void PrintLodTensorIntType(phi::DenseTensor* tensor,
                            int64_t start,
                            int64_t end,
-                           std::string& out_val,
+                           std::string& out_val,  // NOLINT
                            char separator = ',',
                            bool need_leading_separator = true) {
   if (start >= end){
@@ -109,7 +147,8 @@ void PrintLodTensorIntType(Tensor* tensor,
     format_string_append(&out_val, "%c%lu", separator, static_cast<uint64_t>(ptr[i]));
   }
 }
-std::string PrintLodTensor(Tensor* tensor,
+
+std::string PrintLodTensor(phi::DenseTensor* tensor,
                            int64_t start,
                            int64_t end,
                            char separator,
@@ -119,10 +158,11 @@ std::string PrintLodTensor(Tensor* tensor,
       out_val, separator, need_leading_separator);
   return out_val;
 }
-void PrintLodTensor(Tensor* tensor,
+
+void PrintLodTensor(phi::DenseTensor* tensor,
                     int64_t start,
                     int64_t end,
-                    std::string& out_val,
+                    std::string& out_val,  // NOLINT
                     char separator,
                     bool need_leading_separator) {
   auto dtype = framework::TransToProtoVarType(tensor->dtype());
@@ -287,7 +327,7 @@ void DeviceWorker::DumpField(const Scope& scope,
         continue;
       }
       size_t acutal_thread_num =
-          std::min((size_t)batch_size, tensor_iterator_thread_num);
+          std::min(static_cast<size_t>(batch_size), tensor_iterator_thread_num);
       for (size_t i = 0; i < acutal_thread_num; i++) {
         size_t average_size = batch_size / acutal_thread_num;
         size_t begin =
@@ -304,7 +344,7 @@ void DeviceWorker::DumpField(const Scope& scope,
     VLOG(1) << "writing a batch takes " << tt.count() << " us";
 
     size_t acutal_thread_num =
-        std::min((size_t)batch_size, tensor_iterator_thread_num);
+        std::min(static_cast<size_t>(batch_size), tensor_iterator_thread_num);
     for (size_t i = 0; i < acutal_thread_num; i++) {
       size_t average_size = batch_size / acutal_thread_num;
       size_t begin =
@@ -384,6 +424,17 @@ void DeviceWorker::DumpField(const Scope& scope,
     }
     writer_ << ars[i];
   }
+  writer_.Flush();
+}
+template<class... ARGS>
+void format_string_append(std::string* str,
+    const char* fmt, ARGS && ... args) { // use VA_ARGS may be better ?
+    int len = snprintf(NULL, 0, fmt, args...);
+    PADDLE_ENFORCE(len >= 0, "format args length error");
+    size_t oldlen = str->length();
+    str->resize(oldlen + len + 1);
+    PADDLE_ENFORCE(snprintf(&(*str)[oldlen], (size_t)len + 1, fmt, args...) == len);
+    str->resize(oldlen + len);
 }
 inline void GetLodBound(const LoD& lod, const int64_t &dim, const int &index,
     std::pair<int64_t, int64_t> *bound) {
@@ -396,7 +447,7 @@ inline void GetLodBound(const LoD& lod, const int64_t &dim, const int &index,
   }
 }
 template<typename T, typename C>
-void PrintLodTensorFmtType(Tensor* tensor,
+void PrintLodTensorFmtType(phi::DenseTensor* tensor,
                            const int64_t &start,
                            const int64_t &end,
                            const char *fmt,
@@ -409,7 +460,7 @@ void PrintLodTensorFmtType(Tensor* tensor,
     format_string_append(out_val, fmt, static_cast<C>(ptr[i]));
   }
 }
-void PrintLodTensor(Tensor* tensor, const int64_t &start, const int64_t &end, std::string* out) {
+void PrintLodTensor(phi::DenseTensor* tensor, const int64_t &start, const int64_t &end, std::string* out) {
   auto dtype = framework::TransToProtoVarType(tensor->dtype());
   if (dtype == proto::VarType::FP32) {
     PrintLodTensorFmtType<float, float>(tensor, start, end, ":%.9g", out);

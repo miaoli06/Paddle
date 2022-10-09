@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
 import unittest
 import numpy as np
 import sys
@@ -121,7 +120,6 @@ class XPUTestOneHotOP(XPUOpTestWrapper):
 
 
 support_types = get_xpu_op_support_types('one_hot')
-print("support_types: %s" % str(support_types))
 for stype in support_types:
     create_test_class(globals(), XPUTestOneHotOP, stype)
 

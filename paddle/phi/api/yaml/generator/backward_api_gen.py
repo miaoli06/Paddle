@@ -28,14 +28,14 @@ class BackwardAPI(BaseAPI):
         self.no_need_buffer = self.parse_no_need_buffer(backward_item_yaml)
 
     def get_api_name(self, api_item_yaml):
-        return api_item_yaml['backward_api']
+        return api_item_yaml['backward_op']
 
     def parse_forward_config(self, forward_config):
         # api_name (const Tensor& input, ... , int attr, ...) -> Tensor(out)
         result = re.search(
-            r"(?P<api>[a-z][a-z0-9_]+)\s*(?P<args>\([^\)]+\))\s*->\s*(?P<outputs>.+)",
+            r"(?P<op>[a-z][a-z0-9_]+)\s*(?P<args>\([^\)]+\))\s*->\s*(?P<outputs>.+)",
             forward_config)
-        api = result.group('api')
+        api = result.group('op')
         _, outputs, _, = self.parse_output(self.api, result.group('outputs'))
         outputs = [item.split('@')[0] for item in outputs]
         fw_inputs, fw_attrs = self.parse_input_and_attr(api,
@@ -63,20 +63,20 @@ class BackwardAPI(BaseAPI):
                 if input.endswith('_grad'):
                     original_name = input[:-5]
                     assert original_name in fw_outputs, \
-                        ("{} : Input Tensor error: the input tensor({}) of backward should be an input or output or grad of output in forward api. \
-                         Please check the forward of {} in yaml.").format(self.api, input, self.api)
+                        f"{self.api} : Input Tensor error: the input tensor({input}) of backward should be an input or output or grad of output in forward api. \
+                         Please check the forward of {self.api} in yaml."
 
         # check the attributes of backward
         for attr in self.attrs['names']:
             assert (attr in fw_attrs['names'] and self.attrs['attr_info'][attr][0] == fw_attrs['attr_info'][attr][0]) or \
                  self.attrs['attr_info'][attr][1] is not None, \
-                ("{} : Attribute error: The attribute({}) of backward isn't consistent with forward api or doesn't have default value. \
-                 Please check the args of {} in yaml.").format(self.api, attr, self.api)
+                f"{self.api} : Attribute error: The attribute({attr}) of backward isn't consistent with forward api or doesn't have default value. \
+                 Please check the args of {self.api} in yaml."
 
         # check the output of backward
         assert len(self.outputs['types']) <= len(fw_inputs['names']), \
-            ("{} : Output error: The number of outputs should be less then the number of inputs of forward api. \
-             Please check the output of {} in yaml.").format(self.api, self.api)
+            f"{self.api} : Output error: The number of outputs should be less then the number of inputs of forward api. \
+             Please check the output of {self.api} in yaml."
 
     def get_declare_args(self, inplace_flag=False):
         return self.get_define_args()
@@ -97,6 +97,18 @@ class BackwardAPI(BaseAPI):
     def gene_return_code(self):
         return ""
 
+    def gene_api_declaration(self):
+        if not self.is_base_api:
+            invoke_func_name = self.invoke.split('(')[0]
+            if (not invoke_func_name.endswith("_grad")) and (
+                    not invoke_func_name.endswith('_impl')):
+                return ""
+        api_func_name = self.get_api_func_name()
+        api_declaration = f"""
+PADDLE_API void {api_func_name}({self.get_declare_args()});
+"""
+        return api_declaration
+
     def gene_kernel_backend_select(self):
         all_no_need_buffer = True
         for in_name in self.inputs['names']:
@@ -108,7 +120,7 @@ class BackwardAPI(BaseAPI):
   kernel_backend = ParseBackend(egr::Controller::Instance().GetExpectedPlace());
 """
         else:
-            return super(BackwardAPI, self).gene_kernel_backend_select()
+            return super().gene_kernel_backend_select()
 
     def get_return_type(self, inplace_flag=False):
         return 'void'
@@ -133,40 +145,40 @@ class BackwardAPI(BaseAPI):
                 0] == 'dense' else 'SetSelectedRowsKernelOutput'
             if out_dtype_list[0] == 'std::vector<Tensor>':
                 assert self.outputs['out_size_expr'] is not None, \
-                     ("{}: The out size expr : '{{}}' should be set when output has Tensor[]. You can refer 'split' api.").format(self.api, expr)
-                output_create = output_create + ("""
-{}  auto kernel_out = {}(&{});""").format(code_indent, set_out_func, self.outputs['names'][0])
+                     f"{self.api}: The out size expr : '{{expr}}' should be set when output has Tensor[]. You can refer 'split' api."
+                output_create = output_create + f"""
+{code_indent}  auto kernel_out = {set_out_func}(&{self.outputs['names'][0]});"""
 
             else:
-                output_create = output_create + ("""
-{}  auto kernel_out = {}(kernel_backend, {});""").format(code_indent, set_out_func, self.outputs['names'][0])
+                output_create = output_create + f"""
+{code_indent}  auto kernel_out = {set_out_func}({self.outputs['names'][0]});"""
 
         elif len(out_dtype_list) > 1:
             output_create = ""
             for i, out_type_item in enumerate(out_dtype_list):
-                kernel_output.append(('kernel_out_{}').format(i))
-                output_names.append(('kernel_out_{}').format(i))
+                kernel_output.append(f'kernel_out_{i}')
+                output_names.append(f'kernel_out_{i}')
                 set_out_func = 'SetKernelOutput' if out_tensor_type_list is None or out_tensor_type_list[
                     i] == 'dense' else 'SetSelectedRowsKernelOutput'
                 if out_type_item == 'Tensor':
                     if inplace_flag and self.inplace_map is not None and self.outputs[
                             'names'][i] in self.inplace_map:
-                        output_create = output_create + ("""
-{}  *{} = {};""").format(code_indent, self.outputs['names'][i], self.inplace_map[self.outputs['names'][i]])
+                        output_create = output_create + f"""
+{code_indent}  *{self.outputs['names'][i]} = {self.inplace_map[self.outputs['names'][i]]};"""
 
-                    output_create = output_create + ("""
-{}  auto kernel_out_{} = {}(kernel_backend, {});""").format(code_indent, i, set_out_func, self.outputs['names'][i])
+                    output_create = output_create + f"""
+{code_indent}  auto kernel_out_{i} = {set_out_func}({self.outputs['names'][i]});"""
 
                 else:
                     if inplace_flag and self.inplace_map is not None and self.outputs[
                             'names'][i] in self.inplace_map:
-                        output_create = output_create + ("""
-{}  *{} = {};""").format(code_indent, self.outputs['names'][i], self.inplace_map[self.outputs['names'][i]])
+                        output_create = output_create + f"""
+{code_indent}  *{self.outputs['names'][i]} = {self.inplace_map[self.outputs['names'][i]]};"""
 
                     assert self.outputs['out_size_expr'][i] is not None, \
-                        ("{}: The out size expr : '{{}}' should be set when output has Tensor[]. You can refer 'split' api.").format(self.api, expr)
-                    output_create = output_create + ("""
-{}  auto kernel_out_{} = {}(&{});""").format(code_indent, i, set_out_func, self.outputs['names'][i])
+                        f"{self.api}: The out size expr : '{{expr}}' should be set when output has Tensor[]. You can refer 'split' api."
+                    output_create = output_create + f"""
+{code_indent}  auto kernel_out_{i} = {set_out_func}(&{self.outputs['names'][i]});"""
 
         else:
             raise ValueError(
@@ -178,17 +190,14 @@ class BackwardAPI(BaseAPI):
     def gene_invoke_code(self, invoke_code, params_code):
         invoke_func_name = invoke_code.split('(')[0].strip()
         if invoke_func_name.endswith('_grad') or invoke_func_name.endswith(
-                '_grad_impl'):
-            return ("""
-PADDLE_API {} {}({}) {{
-  {};
-}}""").format(self.get_return_type(), self.api, params_code, invoke_code)
+                '_impl'):
+            return f"""
+PADDLE_API {self.get_return_type()} {self.api}({params_code}) {{
+  {invoke_code};
+}}"""
 
         else:
-            return ("""
-PADDLE_API {} {}({}) {{
-  *{} = {};
-}}""").format(self.get_return_type(), self.api, params_code, self.outputs['names'][0].split('@')[0], invoke_code)
+            return ""
 
 
 def header_include():
@@ -203,8 +212,8 @@ def header_include():
 
 
 def source_include(header_file_path):
-    return ("""
-#include "{}"
+    return f"""
+#include "{header_file_path}"
 #include <memory>
 
 #include "glog/logging.h"
@@ -220,9 +229,10 @@ def source_include(header_file_path):
 
 #include "paddle/fluid/eager/api/utils/global_utils.h"
 #include "paddle/fluid/platform/profiler/event_tracing.h"
+#include "paddle/fluid/platform/profiler/supplement_tracing.h"
 
 DECLARE_bool(conv2d_disable_cudnn);
-""").format(header_file_path)
+"""
 
 
 def backward_api_namespace():
