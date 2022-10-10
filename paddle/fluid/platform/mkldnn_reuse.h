@@ -12,7 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 #pragma once
-
+#ifdef PADDLE_WITH_MKLDNN
 #include <algorithm>
 #include <memory>
 #include <sstream>
@@ -434,3 +434,4 @@ class ReorderMKLDNNHandler {
 };
 }  // namespace platform
 }  // namespace paddle
+#endif

@@ -13,6 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 #pragma once
 
+#ifdef PADDLE_WITH_MKLDNN
+
 #include <algorithm>
 #include <iostream>
 #include <memory>
@@ -633,3 +635,4 @@ bool constexpr is_int8() {
 
 }  // namespace platform
 }  // namespace paddle
+#endif

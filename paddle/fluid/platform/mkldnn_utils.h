@@ -10,7 +10,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-
+#ifdef PADDLE_WITH_MKLDNN
 // NOTE:
 // GetMKLDNNFormat function is here temporarily. It is
 // needed because without them forward declaration was causing an error when
@@ -170,3 +170,4 @@ inline dnnl::memory::format_tag GetMKLDNNFormat(dnnl::memory::desc mem_desc) {
 
 }  // namespace platform
 }  // namespace paddle
+#endif

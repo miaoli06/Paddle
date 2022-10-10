@@ -24,7 +24,7 @@ using GPUCtx = phi::GPUContext;
 
 namespace paddle {
 namespace operators {
-using framework::Tensor;
+using Tensor = phi::DenseTensor;
 
 #define CUDA_KERNEL_LOOP(i, n)                                 \
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
@@ -173,16 +173,16 @@ class ScaledFCCUDAKernel : public framework::OpKernel<T> {
     const unsigned int infea_pad = (infea_ori % 8) == 0 ? infea_ori : infea_ori + (8 - infea_ori % 8);
     const unsigned int outfea_pad = (outfea_ori % 8) == 0 ? outfea_ori : outfea_ori + (8 - outfea_ori % 8);
 
-    framework::Tensor input_help;
+    framework::LoDTensor input_help;
     input_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({insnum_pad, infea_pad}, dev_ctx);
 
-    framework::Tensor w_help;
+    framework::LoDTensor w_help;
     w_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({infea_pad, outfea_pad}, dev_ctx);
 
-    framework::Tensor bias_help;
+    framework::LoDTensor bias_help;
     bias_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({outfea_pad, 1}, dev_ctx);
 
-    framework::Tensor output_help;
+    framework::LoDTensor output_help;
     output_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({insnum_pad, outfea_pad}, dev_ctx);
 
     T scale = static_cast<T>(1.0);
@@ -279,19 +279,19 @@ class ScaledFCGradOpCUDAKernel : public framework::OpKernel<T> {
             << ", infea_ori=" << infea_ori << ", infea_pad=" << infea_pad
             << ", outfea_ori=" << outfea_ori << ", outfea_pad=" << outfea_pad;
 
-    framework::Tensor dx_help;
+    framework::LoDTensor dx_help;
     dx_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({insnum_pad, infea_pad}, dev_ctx);
 
-    framework::Tensor dw_help;
+    framework::LoDTensor dw_help;
     dw_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({infea_pad, outfea_pad}, dev_ctx);
 
-    framework::Tensor dout_help;
+    framework::LoDTensor dout_help;
     dout_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({insnum_pad, outfea_pad}, dev_ctx);
 
-    framework::Tensor input_help;
+    framework::LoDTensor input_help;
     input_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({insnum_pad, infea_pad}, dev_ctx);
 
-    framework::Tensor w_help;
+    framework::LoDTensor w_help;
     w_help = ctx.AllocateTmpTensor<paddle::platform::float16, DeviceContext>({infea_pad, outfea_pad}, dev_ctx);
 
     T scale = static_cast<T>(1.0);

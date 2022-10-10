@@ -29,7 +29,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/box_wrapper.h"
 namespace paddle {
 namespace operators {
-using framework::Tensor;
+using Tensor = framework::LoDTensor;
 using platform::PADDLE_CUDA_NUM_THREADS;
 
 template <typename DeviceContext, typename T>
@@ -37,7 +37,7 @@ class CrossNormHadamardCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     auto* input = ctx.Input<framework::LoDTensor>("Input");
-    auto* summary_input = ctx.Input<framework::Tensor>("SummaryInput");
+    auto* summary_input = ctx.Input<framework::LoDTensor>("SummaryInput");
     auto* Out = ctx.Output<Tensor>("Out");
     auto* cuda_means = ctx.Output<Tensor>("CudaMeans");
     auto* cuda_scales = ctx.Output<Tensor>("CudaScales");

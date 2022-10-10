@@ -18,13 +18,13 @@
 
 #include "paddle/fluid/platform/profiler/event_tracing.h"
 #include "paddle/phi/backends/all_context.h"
-#include "paddle/phi/backends/onednn/onednn_context.h"
 #include "paddle/phi/common/bfloat16.h"
 #include "paddle/phi/common/layout.h"
 #include "paddle/phi/common/place.h"
 #include "paddle/phi/core/dense_tensor.h"
 
 #ifdef PADDLE_WITH_MKLDNN
+#include "paddle/phi/backends/onednn/onednn_context.h"
 #include "paddle/phi/backends/onednn/onednn_helper.h"
 #include "paddle/phi/backends/onednn/onednn_reuse.h"
 #endif

@@ -73,8 +73,9 @@ void ConcatKernel(const Context& dev_ctx,
     }
     if (lod_size) {
       auto* out_lod = out->mutable_lod();
+      LoD in_lod;
       for (size_t i = 1; i < x.size(); ++i) {
-        auto in_lod = phi::ConvertToLengthBasedLoD(x[i]->lod());
+        phi::ConvertToLengthBasedLoD(x[i]->lod(), &in_lod);
         phi::AppendLoD(out_lod, in_lod);
       }
     }
