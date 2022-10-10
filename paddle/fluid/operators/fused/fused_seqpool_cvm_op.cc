@@ -265,7 +265,7 @@ class FusedSeqpoolCVMOpCPUKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
     auto inputs = ctx.MultiInput<LoDTensor>("X");
-    auto outputs = ctx.MultiOutput<framework::Tensor>("Out");
+    auto outputs = ctx.MultiOutput<Tensor>("Out");
 
     const auto slot_size = inputs.size();
     auto padding_value = ctx.Attr<float>("pad_value");

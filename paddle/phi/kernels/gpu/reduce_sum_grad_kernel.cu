@@ -40,8 +40,8 @@ void ReduceSumGradKernel(const Context& dev_ctx,
   if (dims.size() == 0) {
     reduce_all = true;
   }
-  std::vector<int> reduce_dims =
-      funcs::details::GetReduceDim(dims.GetData(), dim_size, reduce_all);
+  std::vector<int> reduce_dims;
+  funcs::details::GetReduceDim(dims.GetData(), dim_size, reduce_all, &reduce_dims);
 
   auto update_dims = vectorize(d_x->dims());
   int reduce_num = 1;

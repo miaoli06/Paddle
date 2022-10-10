@@ -53,7 +53,7 @@ class FusedSeqpoolConcatCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     auto place = ctx.GetPlace();
-    auto outputs = ctx.MultiOutput<framework::Tensor>("Out");
+    auto outputs = ctx.MultiOutput<Tensor>("Out");
 
     const int x_num = 2;
     const std::string input_names[] = {"X1", "X2"};
@@ -217,7 +217,7 @@ class FusedConcatCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     auto place = ctx.GetPlace();
-    auto output = ctx.Output<framework::Tensor>("Out");
+    auto output = ctx.Output<Tensor>("Out");
     auto inputs = ctx.MultiInput<LoDTensor>("X");
 
     const int length = ctx.Attr<int>("length");

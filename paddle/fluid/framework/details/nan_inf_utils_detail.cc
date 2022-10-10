@@ -664,8 +664,8 @@ static unsigned int* get_device_num_ptr(const platform::Place& place) {
   thread_local paddle::memory::AllocationPtr gpu_tensor = nullptr;
   if (gpu_tensor == nullptr) {
     auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
-          platform::DeviceContextPool::Instance().Get(place));
-    gpu_tensor = paddle::memory::Alloc(*dev_ctx, sizeof(unsigned int));
+        platform::DeviceContextPool::Instance().Get(place));
+    gpu_tensor = paddle::memory::Alloc(place, sizeof(unsigned int));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemsetAsync(
         gpu_tensor->ptr(), 0, sizeof(unsigned int), dev_ctx->stream()));
   }
@@ -697,7 +697,7 @@ void CheckVarHasNanOrInfRet(const std::string& op_type,
                             const framework::Variable* var,
                             const std::string& var_name,
                             const platform::Place& place) {
-  const Tensor* tensor{nullptr};
+  const phi::DenseTensor* tensor{nullptr};
   if (var->IsType<framework::LoDTensor>()) {
     tensor = &var->Get<framework::LoDTensor>();
   } else if (var->IsType<phi::SelectedRows>()) {

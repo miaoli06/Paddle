@@ -124,8 +124,8 @@ void DistKernel(const Context& dev_ctx,
     T* i_ptr = dev_ctx.template Alloc<T>(&intermediate);
 
     std::vector<int64_t> axis_dims = {static_cast<int64_t>(-1)};
-    std::vector<int> reduce_axis =
-        funcs::details::GetReduceDim(axis_dims, xdim.size(), true);
+    std::vector<int> reduce_axis;
+    phi::funcs::details::GetReduceDim(axis_dims, xdim.size(), true, &reduce_axis);
 
     if (p == 0) {
       ReduceSumWithSubtract<T>

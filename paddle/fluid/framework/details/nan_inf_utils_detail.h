@@ -61,7 +61,7 @@ void tensor_check(const std::string& op_type,
                   const phi::DenseTensor& tensor,
                   const platform::Place& place);
 #if defined(PADDLE_WITH_CUDA)
-void CudaTensorCheckNanInf(const framework::Tensor& tensor, unsigned int* dnum);
+void CudaTensorCheckNanInf(const phi::DenseTensor& tensor, unsigned int* dnum);
 #endif
 }  // namespace details
 }  // namespace framework

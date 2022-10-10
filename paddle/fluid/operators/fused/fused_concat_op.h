@@ -23,6 +23,7 @@ namespace paddle {
 namespace operators {
 
 using LoDTensor = framework::LoDTensor;
+using Tensor = phi::DenseTensor;
 //=============== tensor vector concat part to tensor vector ===================
 template <typename T>
 class FusedSeqpoolConcatOpCPUKernel : public framework::OpKernel<T> {
@@ -50,7 +51,7 @@ class FusedConcatOpCPUKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     auto place = ctx.GetPlace();
-    auto output = ctx.Output<framework::Tensor>("Out");
+    auto output = ctx.Output<Tensor>("Out");
     auto inputs = ctx.MultiInput<LoDTensor>("X");
 
     const int length = ctx.Attr<int>("length");

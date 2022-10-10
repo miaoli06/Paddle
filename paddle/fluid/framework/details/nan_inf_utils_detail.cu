@@ -267,7 +267,7 @@ __global__ void CountNanInfNumKernel(const size_t len, const T* val,
   }
 }
 
-void CudaTensorCheckNanInf(const framework::Tensor& tensor,
+void CudaTensorCheckNanInf(const phi::DenseTensor& tensor,
                            unsigned int* dnum_ptr) {
   auto* dev_ctx = reinterpret_cast<phi::GPUContext*>(
       platform::DeviceContextPool::Instance().Get(tensor.place()));

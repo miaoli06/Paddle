@@ -23,6 +23,7 @@ namespace paddle {
 namespace operators {
 
 using LoDTensor = framework::LoDTensor;
+using Tensor = phi::DenseTensor;
 
 template <typename T>
 class FusedSeqpoolCVMOpWithCreditCPUKernel : public framework::OpKernel<T> {

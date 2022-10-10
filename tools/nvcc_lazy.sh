@@ -48,7 +48,7 @@ echo "# check nvcc version, if nvcc >= 11.7, just run nvcc itself" >> $1
 echo "CUDA_VERSION=\$(nvcc --version | grep -oP '(?<=V)\d*\.\d*')" >> $1
 echo "CUDA_VERSION_MAJOR=\${CUDA_VERSION%.*}" >> $1
 echo "CUDA_VERSION_MINOR=\${CUDA_VERSION#*.}" >> $1
-echo "if (( CUDA_VERSION_MAJOR > 11 || (CUDA_VERSION_MAJOR == 11 && CUDA_VERSION_MINOR >= 7) )); then" >> $1
+echo "if (( CUDA_VERSION_MAJOR >= 11 || (CUDA_VERSION_MAJOR == 11 && CUDA_VERSION_MINOR >= 7) )); then" >> $1
 echo "  nvcc \"\$@\"" >> $1
 echo "  exit" >> $1
 echo "fi" >> $1
@@ -65,7 +65,8 @@ echo "sed -i -e '/LIBRARIES=/{s/\s//g;s/\"\"/ /g}' \${BUILDSH}.pre" >> $1
 echo -e >> $1
 echo "/usr/bin/env bash \${BUILDSH}.pre" >> $1
 echo "STUBF=\$(find \$BUILDDIR -name *.cudafe1.stub.c)" >> $1
-echo "CUFILE=\$(basename -s '.cudafe1.stub.c' \$STUBF)" >> $1
+echo "CUFILE=\$(basename \$STUBF)" >> $1
+echo "CUFILE=\${CUFILE%%.*}" >> $1
 echo "sed -i -e '/__sti____cudaRegisterAll.*__attribute__/a static void __try____cudaRegisterAll(int);' \$STUBF" >> $1
 echo "sed -i -e 's/__sti____cudaRegisterAll\(.*{\)/__do____cudaRegisterAll\1/' \$STUBF" >> $1
 echo "# sed -i -e \"/__do____cudaRegisterAll\(.*{\)/a static void __try____cudaRegisterAll(int l){static int _ls = 0; if (_ls) return; const char* lm = getenv(\\\"CUDA_MODULE_LOADING\\\"); if (lm&&(lm[0]=='L')&&(lm[1]=='A')&&(lm[2]=='Z')&&(lm[3]=='Y')&&(l!=1)) return; _ls = 1; fprintf(stderr,\\\"===> \${CUFILE} lazy-load? %d\\\\\\\\n\\\", l); __do____cudaRegisterAll();}\" \$STUBF" >> $1

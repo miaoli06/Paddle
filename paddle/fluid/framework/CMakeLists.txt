@@ -127,26 +127,37 @@ cc_test(
   SRCS data_type_test.cc
   DEPS data_type place tensor)
 
-cc_library(
-  tensor
-  SRCS tensor_util.cc
-  DEPS place memory data_type device_context dense_tensor)
-
-cc_test(
-  tensor_test
-  SRCS tensor_test.cc
-  DEPS tensor isfinite_op)
 if(WITH_GPU)
+  nv_library(
+  	tensor
+  	SRCS tensor_util.cu
+  	DEPS place memory data_type device_context dense_tensor)
   nv_test(
     tensor_util_test
     SRCS tensor_util_test.cc tensor_util_test.cu
     DEPS tensor dlpack_tensor isfinite_op)
 elseif(WITH_ROCM)
+  cc_library(
+  	tensor
+  	SRCS tensor_util.cc
+  	DEPS place memory data_type device_context dense_tensor)
+  cc_test(
+  	tensor_test
+  	SRCS tensor_test.cc
+  	DEPS tensor isfinite_op)
   hip_test(
     tensor_util_test
     SRCS tensor_util_test.cc tensor_util_test.cu
     DEPS tensor dlpack_tensor isfinite_op)
 else()
+  cc_library(
+  	tensor
+  	SRCS tensor_util.cc
+  	DEPS place memory data_type device_context dense_tensor)
+  cc_test(
+  	tensor_test
+  	SRCS tensor_test.cc
+  	DEPS tensor isfinite_op)
   cc_test(
     tensor_util_test
     SRCS tensor_util_test.cc

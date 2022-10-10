@@ -38,16 +38,16 @@ cc_test(
   jit_kernel_test
   SRCS test.cc
   DEPS jit_kernel_helper)
-if(NOT WIN32)
-  cc_binary(
-    jit_kernel_benchmark
-    SRCS
-    benchmark.cc
-    DEPS
-    jit_kernel_helper
-    device_tracer
-    tensor)
-endif()
 if(WITH_TESTING AND TEST jit_kernel_test)
+  if(NOT WIN32)
+    cc_binary(
+      jit_kernel_benchmark
+      SRCS
+      benchmark.cc
+      DEPS
+      jit_kernel_helper
+      device_tracer
+      tensor)
+  endif()
   set_tests_properties(jit_kernel_test PROPERTIES TIMEOUT 120)
 endif()

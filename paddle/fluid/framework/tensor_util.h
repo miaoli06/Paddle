@@ -563,7 +563,7 @@ inline void TensorToVector(const phi::DenseTensor& src,
 
 std::ostream& operator<<(std::ostream& os, const LoD& lod);
 void TensorScaleValue(const platform::Place& place,
-                      const framework::Tensor& tensor, framework::Tensor* out,
+                      const phi::DenseTensor& tensor, phi::DenseTensor* out,
                       const float scale);
 // get device count
 inline int GetDeviceCount(void) {

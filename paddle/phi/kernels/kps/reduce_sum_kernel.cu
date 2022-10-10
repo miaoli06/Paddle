@@ -91,8 +91,9 @@ void SumRawKernel(const Context& dev_ctx,
           "the same as out dtype"));
     }
 
-    std::vector<int> reduce_dims = phi::funcs::details::GetReduceDim(
-        dims.GetData(), x.dims().size(), reduce_all);
+    std::vector<int> reduce_dims;
+    phi::funcs::details::GetReduceDim(
+        dims.GetData(), x.dims().size(), reduce_all, &reduce_dims);
 
 #define CALL_EIGEN_REDUCE_SUM_KERNEL(reduce_rank)              \
   case reduce_rank: {                                          \

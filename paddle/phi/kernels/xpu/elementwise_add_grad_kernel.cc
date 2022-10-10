@@ -55,8 +55,8 @@ void AddGradKernel(const Context& dev_ctx,
         dx->Resize(x.dims());
         dev_ctx.template Alloc<T>(dx);
       }
-      std::vector<int> reduce_dims =
-          funcs::GetReduceDim(dx->dims(), dz_dims, axis);
+      std::vector<int> reduce_dims;
+      funcs::GetReduceDim(dx->dims(), dz_dims, axis, &reduce_dims);
       std::vector<int> dz_vector = phi::vectorize<int>(dz_dims);
 
       int ret =
@@ -76,8 +76,8 @@ void AddGradKernel(const Context& dev_ctx,
         Copy(dev_ctx, *dz, dev_ctx.GetPlace(), false, dy);
       }
     } else {
-      std::vector<int> reduce_dims =
-          funcs::GetReduceDim(dy->dims(), dz_dims, axis);
+      std::vector<int> reduce_dims;
+      funcs::GetReduceDim(dy->dims(), dz_dims, axis, &reduce_dims);
       std::vector<int> dz_vector = phi::vectorize<int>(dz_dims);
       int ret =
           xpu::reduce_sum<XPUType>(dev_ctx.x_context(),

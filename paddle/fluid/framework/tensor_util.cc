@@ -1187,29 +1187,28 @@ std::ostream& operator<<(std::ostream& os, const LoD& lod) {
   return os;
 }
 #if defined(PADDLE_WITH_CUDA)
-#define CUDA_KERNEL_LOOP(i, n)                                     \
-  for (int64_t i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
-       i += blockDim.x * gridDim.x)
-
 __global__ void kernel_scale_value(const int64_t len, const float* in,
                                    float* out, const float scale) {
   CUDA_KERNEL_LOOP(i, len) { out[i] = in[i] * scale; }
 }
 #endif
 void TensorScaleValue(const platform::Place& place,
-                      const framework::Tensor& tensor, framework::Tensor* out,
+                      const phi::DenseTensor& tensor, phi::DenseTensor* out,
                       const float scale) {
-  const float* src = tensor.data<float>();
-  float* dst = out->data<float>();
-  int64_t len = tensor.numel();
 #if defined(PADDLE_WITH_CUDA)
   auto stream = dynamic_cast<phi::GPUContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
+  const float* src = tensor.data<float>();
+  float* dst = out->data<float>();
+  int64_t len = tensor.numel();
   const int BLOCK_SIZE_ = 256;
   kernel_scale_value<<<(len + BLOCK_SIZE_ - 1) / BLOCK_SIZE_, BLOCK_SIZE_, 0,
                        stream>>>(len, src, dst, scale);
 #elif defined(PADDLE_WITH_XPU)
+  const float* src = tensor.data<float>();
+  float* dst = out->data<float>();
+  int64_t len = tensor.numel();
   auto dev_ctx = dynamic_cast<phi::XPUContext*>(
                       platform::DeviceContextPool::Instance().Get(place));
   int ret = xpu::scale(dev_ctx->x_context(), src, dst, len, false, scale, 0.0);
