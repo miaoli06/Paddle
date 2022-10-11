@@ -138,16 +138,16 @@ class CrossNormHadamardOpCUDAKernel : public framework::OpKernel<T> {
     }
     sum_offset[0] = 0;
 
-    auto tmp_array = memory::Alloc(dev_ctx, sum_offset.size() * sizeof(int));
+    auto tmp_array = memory::Alloc(dev_ctx.GetPlace(), sum_offset.size() * sizeof(int));
     memory::Copy(dev_ctx.GetPlace(),
                  tmp_array->ptr(), platform::CPUPlace(),
                  reinterpret_cast<void*>(sum_offset.data()),
                  sum_offset.size() * sizeof(int), dev_ctx.stream());
     int* g_sum_offset = reinterpret_cast<int*>(tmp_array->ptr());
 
-    auto temp_grad_buf1 = memory::Alloc(dev_ctx, sizeof(T) * cols);
+    auto temp_grad_buf1 = memory::Alloc(dev_ctx.GetPlace(), sizeof(T) * cols);
     T* g_grad_buf1 = reinterpret_cast<T*>(temp_grad_buf1->ptr());
-    auto temp_grad_buf2 = memory::Alloc(dev_ctx, sizeof(T) * cols);
+    auto temp_grad_buf2 = memory::Alloc(dev_ctx.GetPlace(), sizeof(T) * cols);
     T* g_grad_buf2 = reinterpret_cast<T*>(temp_grad_buf2->ptr());
 
     nncross_norm_bp<T>(fields_num, embed_dim, rows, input_help.data<T>(),

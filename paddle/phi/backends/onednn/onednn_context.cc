@@ -11,7 +11,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#ifdef PADDLE_WITH_MKLDNN
 #include "paddle/phi/backends/onednn/onednn_context.h"
 
 #include "paddle/phi/common/place.h"
@@ -292,7 +291,8 @@ struct OneDNNContext::Impl {
   // 0 - clearing is allowed. x > 0 do not clear.
   unsigned int block_next_cache_clearing_ = 0;
 };
-
+OneDNNContext::OneDNNContext()
+    : CPUContext(phi::CPUPlace()), impl_(std::make_unique<Impl>()) {}
 OneDNNContext::OneDNNContext(const Place& place)
     : CPUContext(place), impl_(std::make_unique<Impl>()) {}
 
@@ -323,4 +323,3 @@ OneDNNContext::BlobPtr_t<void> OneDNNContext::GetBlob(
 }
 
 }  // namespace phi
-#endif

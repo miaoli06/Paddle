@@ -196,7 +196,7 @@ void nncross_norm_bp(int N, int embed_dim, int ins_num, const T* inputs,
   cub::DeviceSegmentedReduce::Sum(NULL, temp_storage_bytes, norm_output,
                                   sum_grad_buf, norm_cols, sum_offset,
                                   sum_offset + 1);
-  auto temp_cub_buf = memory::Alloc(dev_ctx, temp_storage_bytes);
+  auto temp_cub_buf = memory::Alloc(dev_ctx.GetPlace(), temp_storage_bytes);
   T* cub_buf = reinterpret_cast<T*>(temp_cub_buf->ptr());
 
   cub::DeviceSegmentedReduce::Sum(cub_buf, temp_storage_bytes, norm_output,

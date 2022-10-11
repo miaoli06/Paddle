@@ -13,7 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-#ifdef PADDLE_WITH_MKLDNN
 #include <memory>
 #include <mutex>     // NOLINT
 #include "dnnl.hpp"  // NOLINT
@@ -107,6 +106,7 @@ class OneDNNContext : public CPUContext {
       std::unordered_map<ExecKey, std::vector<ExecMapCacheIterPair>>;
   using ExecShape = std::unordered_map<std::string, std::shared_ptr<ExecMap>>;
 
+  OneDNNContext();
   explicit OneDNNContext(const Place& place);
   ~OneDNNContext();
   /* \brief  Get the active engine */
@@ -140,4 +140,3 @@ class OneDNNContext : public CPUContext {
 };
 
 }  // namespace phi
-#endif

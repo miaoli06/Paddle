@@ -64,7 +64,7 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
     phi::DenseTensor param_help;
     param_help = ctx.AllocateTmpTensor<T, DeviceContext>(
         {max_ins * block_matrix_row, para_col}, dev_ctx);
-    param_help.mutable_data<T>(ctx.GetPlace());
+    T *param_help_data = param_help.mutable_data<T>(ctx.GetPlace());
 
     input_help->Resize({max_ins, block_matrix_row});
     ins_rank->Resize({max_ins, 1});
@@ -75,7 +75,6 @@ class RankAttentionCUDAKernel : public framework::OpKernel<T> {
     auto stream = ctx.cuda_device_context().stream();
     // get data ptr
     T *input_help_data = input_help->data<T>();
-    T *param_help_data = param_help->data<T>();
     T *ins_rank_data = ins_rank->data<T>();
     T *out_data = Out->data<T>();
 
