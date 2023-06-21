@@ -27,6 +27,7 @@ from .auto_parallel_supplement_explicit_dependencies import *  # noqa: F403
 from .cpp_pass import *  # noqa: F403
 from .ps_trainer_pass import *  # noqa: F403
 from .ps_server_pass import *  # noqa: F403
+from .auto_adjust_pass import * # auto adjust op order
 
 __all__ = [
     'new_pass',

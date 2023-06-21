@@ -771,6 +771,7 @@ class GraphTable : public Table {
   void fennel_graph_edge_partition_cx();
   void fennel_graph_edge_partition_bx();
   void fennel_graph_feature_partition();
+  void fennel_graph_edge_partition_new();
   void hard_graph_edge_partition();
   void hard_graph_feature_partition();
 
