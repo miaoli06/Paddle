@@ -1252,7 +1252,11 @@ void GraphTable::graph_partition(bool is_edge) {
     }
   } else if (strncasecmp(mode.c_str(), "fennel", 6) == 0) {
     if (is_edge) {
-      fennel_graph_edge_partition();
+      if (mode == "fennel_type") {
+        fennel_graph_edge_partition_etype();
+      } else {
+        fennel_graph_edge_partition();
+      }
     } else {
       fennel_graph_feature_partition();
     }
@@ -1462,7 +1466,11 @@ void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, ui
 void GraphTable::fennel_graph_edge_partition() {
   VLOG(0) << "start to process fennel2 egde shard";
   std::vector<std::future<size_t>> wait_tasks;
-  robin_hood::unordered_flat_map<uint64_t, std::vector<Node *>> neighbor_nodes[shard_num_per_server];
+  struct NodeInfo {
+    size_t neighbor_num;
+    std::vector<Node *> nodes;
+  };
+  robin_hood::unordered_flat_map<uint64_t, NodeInfo> neighbor_nodes[shard_num_per_server];
   // 聚合所有边表关系
   for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
     wait_tasks.push_back(load_node_edge_task_pool->enqueue([this, part_id, &neighbor_nodes]() {
@@ -1472,13 +1480,16 @@ void GraphTable::fennel_graph_edge_partition() {
         auto &shard = edge_shards[idx][part_id];
         auto &nodes = shard->get_bucket();
         for (auto &node : nodes) {
+          size_t nb_num = node->get_neighbor_size();
           auto it = n_nodes.find(node->get_id());
           if (it != n_nodes.end()) {
-            it->second.push_back(node);
+            it->second.neighbor_num += nb_num;
+            it->second.nodes.push_back(node);
           } else {
-            std::vector<Node *> vec;
-            vec.push_back(node);
-            n_nodes.emplace(node->get_id(), vec);
+            NodeInfo info;
+            info.neighbor_num = nb_num;
+            info.nodes.push_back(node);
+            n_nodes.emplace(node->get_id(), info);
             ++cnt;
           }
        }
@@ -1505,7 +1516,7 @@ void GraphTable::fennel_graph_edge_partition() {
   }
   // 获取与邻居的边交集数量
   auto get_inter_cost = [this, &neighbor_nodes] (
-      const uint64_t &key, const std::vector<Node*> &nodes, std::vector<int> *inter_cost) {
+      const std::vector<Node*> &nodes, std::vector<int> *inter_cost) {
     bool find = false;
     for (auto &node : nodes) {
       for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
@@ -1528,7 +1539,7 @@ void GraphTable::fennel_graph_edge_partition() {
 //      VLOG(0) << "get rank by score not found key=" << key;
       return -1;
     }
-    if (!get_inter_cost(key, it->second, &inter_cost)) {
+    if (!get_inter_cost(it->second.nodes, &inter_cost)) {
       return -1;
     }
     int index = -1;
@@ -1558,6 +1569,7 @@ void GraphTable::fennel_graph_edge_partition() {
     uint64_t key = 0xffffffffffffffffL;
     int min_inter_cost = INT_MAX;
     int step = 0;
+    size_t max_neighbor = 0;
     std::vector<int> inter_cost(node_num_, 0);
     for (size_t shard_id = 0; shard_id < shard_num_per_server; ++shard_id) {
       auto &n_nodes = neighbor_nodes[shard_id];
@@ -1568,14 +1580,16 @@ void GraphTable::fennel_graph_edge_partition() {
         if (egde_node_rank_.find(it->first) >= 0) {
           continue;
         }
-        get_inter_cost(it->first, it->second, &inter_cost);
+        get_inter_cost(it->second.nodes, &inter_cost);
         for (int k = 0; k < node_num_; ++k) {
           if (k == rank_id) {
             inter_cost[k] = 0;
             continue;
           }
-          if (min_inter_cost > inter_cost[k]) {
+          if (min_inter_cost > inter_cost[k]
+               && max_neighbor < it->second.neighbor_num) {
             min_inter_cost = inter_cost[k];
+            max_neighbor = it->second.neighbor_num;
             key = it->first;
           }
           inter_cost[k] = 0;
@@ -1593,8 +1607,10 @@ void GraphTable::fennel_graph_edge_partition() {
     return key;
   };
   // 其它结点都添加完成，剩余的点就直接放到这个机器上面
-  auto add_all_left_node = [this, &neighbor_nodes](const int &rank_id) -> size_t {
+  auto add_all_left_node_by_score = [this, &neighbor_nodes, get_inter_cost](
+      const int &rank_id) -> size_t {
     size_t cnt = 0;
+    std::vector<int> inter_cost(node_num_, 0);
     for (size_t shard_id = 0; shard_id < shard_num_per_server; ++shard_id) {
       auto &n_nodes = neighbor_nodes[shard_id];
       if (n_nodes.empty()) {
@@ -1604,7 +1620,21 @@ void GraphTable::fennel_graph_edge_partition() {
         if (egde_node_rank_.find(it->first) >= 0) {
           continue;
         }
-        egde_node_rank_.insert(it->first, rank_id);
+        if (!get_inter_cost(it->second.nodes, &inter_cost)) {
+          egde_node_rank_.insert(it->first, rank_id);
+        } else {
+          int index = -1;
+          int max_score = INT_MIN;
+          for (int i = 0; i < node_num_; ++i) {
+            auto &score = inter_cost[i];
+            if (score > max_score) {
+              max_score = score;
+              index = i;
+            }
+            inter_cost[i] = 0;
+          }
+          egde_node_rank_.insert(it->first, index);
+        }
         ++cnt;
       }
     }
@@ -1614,18 +1644,20 @@ void GraphTable::fennel_graph_edge_partition() {
   typedef std::deque<uint64_t> NodeQueue;
   // 添加所有邻居入队列
   auto add_neighbor_to_queue = [this, &neighbor_nodes](
-      const uint64_t &key, NodeQueue *queue, UniqueSet *unique) {
+      const uint64_t &key, NodeQueue *queue, UniqueSet *unique) ->size_t {
     auto &shard = neighbor_nodes[key % shard_num_per_server];
     if (shard.empty()) {
-      return;
+      return 0;
     }
     auto it = shard.find(key);
     if (it == shard.end()) {
-      return;
+      return 0;
     }
     unique->insert(key);
-    for (auto &node : it->second) {
-      for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
+    size_t nb_total = it->second.neighbor_num;
+    for (auto &node : it->second.nodes) {
+      size_t num = node->get_neighbor_size();
+      for (size_t n_i = 0; n_i < num; ++n_i) {
         uint64_t d_id = node->get_neighbor_id(n_i);
         if (unique->find(d_id) != unique->end()) {
           continue;
@@ -1635,6 +1667,7 @@ void GraphTable::fennel_graph_edge_partition() {
       }
     }
     shard.erase(it);
+    return nb_total;
   };
 
   UniqueSet keys_unique;
@@ -1643,9 +1676,11 @@ void GraphTable::fennel_graph_edge_partition() {
 
   size_t cnt = 0;
   size_t start_print = 0;
-  size_t max_node = 0;
+//  size_t max_node = 0;
+  size_t max_neighbor = 0;
   int max_step = 10;
   std::vector<size_t> rank_nums(node_num_, 0);
+  std::vector<size_t> neighbor_nums(node_num_, 0);
   while (cnt < total_node) {
     int need_proc_node = node_num_;
     for (int rank_id = 0; rank_id < node_num_; ++rank_id) {
@@ -1655,15 +1690,20 @@ void GraphTable::fennel_graph_edge_partition() {
         continue;
       }
       // 如果发现某一个机器上面点明显变多就让下一个节点处理
-      if (num > max_node) {
-        max_node = num;
+//      if (num > max_node) {
+//        max_node = num;
+//        continue;
+//      }
+      auto &n_num = neighbor_nums[rank_id];
+      if (n_num > max_neighbor && keys_unique.size() < total_node) {
+        max_neighbor = n_num;
         continue;
       }
       auto &queue = node_queue[rank_id];
       if (queue.empty()) {
         // 如果其它节点都处理完，这个节点就直接收集所有其它点就可以
-        if (need_proc_node == 1) {
-          cnt += add_all_left_node(rank_id);
+        if (need_proc_node == 1 || max_step <= 0) {
+          cnt += add_all_left_node_by_score(rank_id);
         } else {
           uint64_t key = find_farthest_start_node(rank_id, max_step);
           if (max_step == 10 || max_step == 9) {
@@ -1675,7 +1715,7 @@ void GraphTable::fennel_graph_edge_partition() {
           ++rank_nums[rank_id];
           egde_node_rank_.insert(key, rank_id);
           ++cnt;
-          add_neighbor_to_queue(key, &queue, &keys_unique);
+          neighbor_nums[rank_id] += add_neighbor_to_queue(key, &queue, &keys_unique);
         }
         continue;
       }
@@ -1687,7 +1727,17 @@ void GraphTable::fennel_graph_edge_partition() {
       if (rank >= 0) {
         egde_node_rank_.insert(key, rank);
         ++cnt;
-        add_neighbor_to_queue(key, &node_queue[rank], &keys_unique);
+        neighbor_nums[rank] += add_neighbor_to_queue(key, &node_queue[rank], &keys_unique);
+      }
+    }
+    // add left
+    if (need_proc_node == 1 || max_step <= 0) {
+      for (int rank_id = 0; rank_id < node_num_; ++rank_id) {
+        auto &num = egde_node_rank_.nodes_num(rank_id);
+        if (num >= load_limit) {
+          continue;
+        }
+        cnt += add_all_left_node_by_score(rank_id);
       }
     }
     if (cnt - start_print > 10000000) {
@@ -1696,9 +1746,363 @@ void GraphTable::fennel_graph_edge_partition() {
             << ", egde_node_ids[" << i << "] :" << egde_node_rank_.nodes_num(i)
             << ", queue size: " << node_queue[i].size()
             << ", first size: " << rank_nums[i]
-            << ", keys_unique: " << keys_unique.size();
+            << ", keys_unique: " << keys_unique.size()
+            << ", neighbor_nums: " << neighbor_nums[i];
       }
       start_print = cnt;
+    }
+  }
+  // end split nodes
+  for (int i = 0; i < node_num_; i++) {
+    VLOG(0) << " egde_node_ids[" << i << "] :" << egde_node_rank_.nodes_num(i);
+  }
+  filter_graph_edge_nodes();
+  VLOG(0) << "end to process fennel new egde shard";
+}
+void GraphTable::fennel_graph_edge_partition_etype() {
+  VLOG(0)<< "start to process fennel by egde type shard";
+  std::vector<std::future<size_t>> wait_tasks;
+  std::map<std::string, std::vector<int>> etypes_map;
+  for (size_t i = 0; i < id_to_edge.size(); ++i) {
+    std::string etype = id_to_edge[i];
+    auto it = etypes_map.find(etype);
+    if (it != etypes_map.end()) {
+      continue;
+    }
+    it = etypes_map.find(get_inverse_etype(etype));
+    if (it == etypes_map.end()) {
+      std::vector<int> ids;
+      ids.push_back(i);
+      etypes_map.insert(std::make_pair(etype, ids));
+    } else {
+      it->second.push_back(i);
+    }
+  }
+  std::vector<std::vector<int>> etypes_ids;
+  for (auto &it : etypes_map) {
+    etypes_ids.push_back(it.second);
+  }
+  std::vector<std::vector<size_t>> edge_neighbor_vecs;
+  edge_neighbor_vecs.resize(etypes_ids.size());
+  struct NodeInfo {
+    size_t neighbor_num;
+    std::vector<Node *> nodes;
+  };
+  typedef robin_hood::unordered_flat_map<uint64_t, NodeInfo> Key2FlatMap;
+  std::vector<std::vector<Key2FlatMap>> neighbor_nodes;
+  neighbor_nodes.resize(etypes_ids.size());
+  // 聚合所有边表关系
+  for (size_t i = 0; i < etypes_ids.size(); ++i) {
+    neighbor_nodes[i].resize(shard_num_per_server);
+    edge_neighbor_vecs[i].resize(shard_num_per_server);
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      wait_tasks.push_back(load_node_edge_task_pool->enqueue(
+          [this, i, part_id, &etypes_ids, &neighbor_nodes, &edge_neighbor_vecs]() {
+        size_t cnt = 0;
+        auto &n_nodes = neighbor_nodes[i][part_id];
+        for (auto &idx : etypes_ids[i]) {
+          auto &shard = edge_shards[idx][part_id];
+          auto &nodes = shard->get_bucket();
+          for (auto &node : nodes) {
+            size_t nb_num = node->get_neighbor_size();
+            auto it = n_nodes.find(node->get_id());
+            if (it != n_nodes.end()) {
+              it->second.neighbor_num += nb_num;
+              it->second.nodes.push_back(node);
+            } else {
+              NodeInfo info;
+              info.neighbor_num = nb_num;
+              info.nodes.push_back(node);
+              n_nodes.emplace(node->get_id(), info);
+              ++cnt;
+            }
+            edge_neighbor_vecs[i][part_id] += nb_num;
+          }
+        }
+        return cnt;
+      }));
+    }
+  }
+  // 等待聚合线程结束
+  size_t total_node = 0;
+  for (auto &t : wait_tasks) {
+    total_node += t.get();
+  }
+
+  size_t load_limit = static_cast<size_t>((total_node + node_num_ - 1) / node_num_);
+  VLOG(0) << "gather total edge node count=" << total_node
+      << ", load_limit: " << load_limit << ", type num: " << etypes_ids.size();
+  // init,每个子图插入一个节点, 记录每台机器子图已有的节点set
+  std::vector<size_t> ntype_nums(etypes_ids.size(), 0);
+  std::vector<size_t> edge_neighbor_nums(etypes_ids.size(), 0);
+  egde_node_rank_.clear();
+  egde_node_rank_.init(node_num_, shard_num_per_server);
+  for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+    size_t cnt = 0;
+    for (size_t i = 0; i < etypes_ids.size(); ++i) {
+      cnt += neighbor_nodes[i][part_id].size();
+      ntype_nums[i] += neighbor_nodes[i][part_id].size();
+      edge_neighbor_nums[i] += edge_neighbor_vecs[i][part_id];
+    }
+    egde_node_rank_.rehash(part_id, cnt);
+  }
+  std::vector<std::pair<size_t, int>>  etype_nums;
+  for (size_t i = 0; i < etypes_ids.size(); ++i) {
+    etype_nums.push_back(std::make_pair(edge_neighbor_nums[i], i));
+  }
+  std::sort(etype_nums.begin(), etype_nums.end(), [](
+      const std::pair<size_t, int> &a, const std::pair<size_t, int> &b){
+    return (a.first > b.first);
+  });
+  // 获取与邻居的边交集数量
+  auto get_inter_cost = [this] (
+      const std::vector<Node*> &nodes, std::vector<int> *inter_cost) {
+    bool find = false;
+    for (auto &node : nodes) {
+      for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
+        uint64_t d_id = node->get_neighbor_id(n_i);
+        int rank = egde_node_rank_.find(d_id);
+        if (rank < 0) {
+          continue;
+        }
+        ++(*inter_cost)[rank];
+        find = true;
+      }
+    }
+    return find;
+  };
+  // 根据score计算当前所属机器
+  auto get_rank_by_score = [this, &load_limit, &neighbor_nodes, get_inter_cost] (
+      const int &idx, const uint64_t &key)->int {
+    thread_local std::vector<int> inter_cost(node_num_, 0);
+    auto &shard = neighbor_nodes[idx][key % shard_num_per_server];
+    auto it = shard.find(key);
+    if (it == shard.end()) {
+      return -1;
+    }
+    if (!get_inter_cost(it->second.nodes, &inter_cost)) {
+      return -1;
+    }
+    int index = -1;
+    int max_score = INT_MIN;
+    for (int i = 0; i < node_num_; ++i) {
+      auto &score = inter_cost[i];
+      if (score > max_score) {
+        max_score = score;
+        index = i;
+      }
+      inter_cost[i] = 0;
+    }
+    CHECK(max_score > 0);
+    return index;
+  };
+  // 查找关系最远点作为起点
+  auto find_farthest_start_node = [this, &neighbor_nodes, get_inter_cost](
+      const int &idx, const int &rank_id, const int &max_step, const size_t &part_id) -> uint64_t {
+    uint64_t key = 0xffffffffffffffffL;
+    int min_inter_cost = INT_MAX;
+    int step = 0;
+    size_t max_neighbor = 0;
+    std::vector<int> inter_cost(node_num_, 0);
+    size_t shard_id = part_id;
+    for (size_t id = 0; id < shard_num_per_server; ++id) {
+      shard_id = (shard_id + id) % shard_num_per_server;
+      auto &n_nodes = neighbor_nodes[idx][shard_id];
+      if (n_nodes.empty()) {
+        continue;
+      }
+      for (auto it = n_nodes.begin(); it != n_nodes.end(); ++it) {
+        get_inter_cost(it->second.nodes, &inter_cost);
+        for (int k = 0; k < node_num_; ++k) {
+          if (k == rank_id) {
+            inter_cost[k] = 0;
+            continue;
+          }
+          if (min_inter_cost > inter_cost[k] && max_neighbor < it->second.neighbor_num) {
+            max_neighbor = it->second.neighbor_num;
+            min_inter_cost = inter_cost[k];
+            key = it->first;
+          }
+          inter_cost[k] = 0;
+        }
+        ++step;
+        if (step >= max_step) {
+          break;
+        }
+      }
+      if (step >= max_step) {
+        break;
+      }
+    }
+    if (step > 0) {
+      CHECK(key != 0xffffffffffffffffL);
+    }
+    return key;
+  };
+  // 其它结点都添加完成，剩余的点就直接放到这个机器上面
+  auto add_all_left_node_by_score = [this, &neighbor_nodes, get_inter_cost](
+      const int &idx, const int &rank_id) -> size_t {
+    size_t cnt = 0;
+    std::vector<int> inter_cost(node_num_, 0);
+    for (size_t shard_id = 0; shard_id < shard_num_per_server; ++shard_id) {
+      auto &n_nodes = neighbor_nodes[idx][shard_id];
+      if (n_nodes.empty()) {
+        continue;
+      }
+      for (auto it = n_nodes.begin(); it != n_nodes.end(); ++it) {
+        ++cnt;
+        if (egde_node_rank_.find(it->first) >= 0) {
+          continue;
+        }
+        if (!get_inter_cost(it->second.nodes, &inter_cost)) {
+          egde_node_rank_.insert(it->first, rank_id);
+        } else {
+          int index = -1;
+          int max_score = INT_MIN;
+          for (int i = 0; i < node_num_; ++i) {
+            auto &score = inter_cost[i];
+            if (score > max_score) {
+              max_score = score;
+              index = i;
+            }
+            inter_cost[i] = 0;
+          }
+          egde_node_rank_.insert(it->first, index);
+        }
+      }
+    }
+    return cnt;
+  };
+  typedef std::deque<uint64_t> NodeQueue;
+  typedef robin_hood::unordered_flat_set<uint64_t> FlatSet;
+  // 添加所有邻居入队列
+  auto add_neighbor_to_queue = [this, &neighbor_nodes](
+      const int &idx, const uint64_t &key, NodeQueue *queue, FlatSet *unique) ->size_t {
+    auto &shard = neighbor_nodes[idx][key % shard_num_per_server];
+    if (shard.empty()) {
+      return 0;
+    }
+    auto it = shard.find(key);
+    if (it == shard.end()) {
+      return 0;
+    }
+    unique->emplace(key);
+    size_t nb_total = it->second.neighbor_num;
+    for (auto &node : it->second.nodes) {
+      for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
+        uint64_t d_id = node->get_neighbor_id(n_i);
+        if (unique->find(d_id) != unique->end()) {
+          continue;
+        }
+        unique->emplace(d_id);
+        queue->push_back(d_id);
+      }
+    }
+    shard.erase(it);
+    return nb_total;
+  };
+
+  for (auto &t : etype_nums) {
+    int type_id = t.second;
+    size_t start_print = 0;
+    size_t max_neighbor = 0;
+    int max_step = 10;
+    size_t &type_node_num = ntype_nums[type_id];
+    FlatSet keys_unique;
+    keys_unique.rehash(type_node_num);
+    std::vector<size_t> rank_nums(node_num_, 0);
+    std::vector<size_t> neighbor_nums(node_num_, 0);
+    NodeQueue node_queue[node_num_];
+    size_t cnt = 0;
+    size_t edge_limit = static_cast<size_t>(
+        (edge_neighbor_nums[type_id] + node_num_ - 1) / node_num_);
+    size_t part_id = 0;
+    while (cnt < type_node_num) {
+      int need_proc_node = node_num_;
+      for (int rank_id = 0; rank_id < node_num_; ++rank_id) {
+        auto &n_num = neighbor_nums[rank_id];
+        if (n_num >= edge_limit) {
+          --need_proc_node;
+          continue;
+        }
+        if (n_num > max_neighbor && keys_unique.size() < type_node_num) {
+          max_neighbor = n_num;
+          continue;
+        }
+        auto &queue = node_queue[rank_id];
+        if (queue.empty()) {
+          if (need_proc_node == 1 || max_step <= 0) {
+            cnt += add_all_left_node_by_score(type_id, rank_id);
+            VLOG(0) << "rank id=" << rank_id << ", add all left node count=" << cnt;
+          } else {
+            uint64_t key = find_farthest_start_node(type_id, rank_id, max_step, part_id);
+            ++part_id;
+            ++rank_nums[rank_id];
+            int rank = egde_node_rank_.find(key);
+            if (rank < 0) {
+              egde_node_rank_.insert(key, rank_id);
+              if (max_step == 10 || max_step == 9) {
+                VLOG(0) << "rank id=" << rank_id << ", add first node key=" << key;
+              }
+              rank = rank_id;
+            }
+            ++cnt;
+            neighbor_nums[rank] += add_neighbor_to_queue(type_id, key, &node_queue[rank], &keys_unique);
+
+            if (max_step > 0) {
+              --max_step;
+            }
+          }
+          continue;
+        }
+
+        uint64_t key = queue.front();
+        queue.pop_front();
+
+        int rank = get_rank_by_score(type_id, key);
+        if (rank < 0) {
+          continue;
+        }
+        int id = egde_node_rank_.find(key);
+        if (id < 0) {
+          egde_node_rank_.insert(key, rank);
+          neighbor_nums[rank] += add_neighbor_to_queue(type_id, key, &node_queue[rank], &keys_unique);
+        } else {
+          neighbor_nums[id] += add_neighbor_to_queue(type_id, key, &node_queue[id], &keys_unique);
+        }
+        ++cnt;
+      }
+      // left one node add left all node
+      if (need_proc_node == 1) {
+        for (int rank_id = 0; rank_id < node_num_; ++rank_id) {
+          auto &n_num = neighbor_nums[rank_id];
+          if (n_num >= edge_limit) {
+            continue;
+          }
+          cnt += add_all_left_node_by_score(type_id, rank_id);
+          VLOG(0) << "rank id=" << rank_id << ", add end all left node count=" << cnt;
+        }
+      }
+      if (cnt - start_print > 10000000) {
+        for (int i = 0; i < node_num_; i++) {
+          VLOG(0) << "type_id=" << type_id << ", node count: [" << cnt << "/" << ntype_nums[type_id]
+            << "], egde_node_ids[" << i << "]: " << egde_node_rank_.nodes_num(i)
+            << ", neighbor: [" << neighbor_nums[i] << "/" << edge_limit
+            << "], unique: " << keys_unique.size()
+            << ", queue size: " << node_queue[i].size()
+            << ", first size: " << rank_nums[i];
+        }
+        start_print = cnt;
+      }
+    }
+    for (int i = 0; i < node_num_; i++) {
+      VLOG(0) << "id=" << type_id << ", name: [" << id_to_edge[etypes_ids[type_id][0]] << "]"
+        << ", final node count: [" << cnt << "/" << ntype_nums[type_id]
+        << "], egde_node_ids[" << i << "]: " << egde_node_rank_.nodes_num(i)
+        << ", neighbor: " << neighbor_nums[i]
+        << ", unique: " << keys_unique.size()
+        << ", queue size: " << node_queue[i].size()
+        << ", first size: " << rank_nums[i];
     }
   }
   // end split nodes
@@ -1712,16 +2116,24 @@ void GraphTable::filter_graph_edge_nodes() {
   VLOG(0) << "begin filter graph edge nodes";
   // 过滤不属于自己边表信息
   std::vector<std::future<std::pair<size_t, size_t>>> shard_tasks;
-  std::vector<size_t> total_edge_count(shard_num_per_server, 0);
   std::vector<size_t> edge_before_count(edge_shards.size(), 0);
 
-  std::vector<std::vector<size_t>> rank_edge_count;
-  std::vector<std::vector<size_t>> cross_edge_count;
+  std::vector<std::vector<size_t>> total_edge_count;
+  total_edge_count.resize(edge_shards.size());
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    total_edge_count[idx].resize(shard_num_per_server, 0);
+  }
+  std::vector<std::vector<std::vector<size_t>>> rank_edge_count;
+  std::vector<std::vector<std::vector<size_t>>> cross_edge_count;
   rank_edge_count.resize(node_num_);
   cross_edge_count.resize(node_num_);
   for (int i = 0; i < node_num_; ++i) {
-    rank_edge_count[i].resize(shard_num_per_server, 0);
-    cross_edge_count[i].resize(shard_num_per_server, 0);
+    rank_edge_count[i].resize(edge_shards.size());
+    cross_edge_count[i].resize(edge_shards.size());
+    for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+      rank_edge_count[i][idx].resize(shard_num_per_server, 0);
+      cross_edge_count[i][idx].resize(shard_num_per_server, 0);
+    }
   }
   // 获取边是否跨机统计
   auto get_cross_edge_count = [this](const int &rank_id, Node *node) {
@@ -1751,7 +2163,7 @@ void GraphTable::filter_graph_edge_nodes() {
         auto &nodes = shard->get_bucket();
         std::vector<uint64_t> remove_ids;
         for (auto &node : nodes) {
-          total_edge_count[part_id] += node->get_neighbor_size();
+          total_edge_count[idx][part_id] += node->get_neighbor_size();
           auto nid = node->get_id();
           // 节点插入到对应的机器shard中
           int rank = egde_node_rank_.find(nid);
@@ -1760,8 +2172,8 @@ void GraphTable::filter_graph_edge_nodes() {
             ++remove_cnt;
           }
           // 统计各节点边分布情况
-          cross_edge_count[rank][part_id] += get_cross_edge_count(rank, node);
-          rank_edge_count[rank][part_id] += node->get_neighbor_size();
+          cross_edge_count[rank][idx][part_id] += get_cross_edge_count(rank, node);
+          rank_edge_count[rank][idx][part_id] += node->get_neighbor_size();
 
           ++total_cnt;
         }
@@ -1780,24 +2192,32 @@ void GraphTable::filter_graph_edge_nodes() {
     all_node_size += res.first;
     all_cut_size += res.second;
   }
-  // 分类型打印边的分布情况
-  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
-    size_t total = 0;
-    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
-      total += edge_shards[idx][part_id]->get_size();
-    }
-    VLOG(0) << "filter edge idx=" << idx << ", total edge nodes="
-        << edge_before_count[idx] << ", left edge nodes count=" << total;
-  }
-  // 统计所有边以及跨节点情况
+  // 分类型打印边的分布情况, 统计所有边以及跨节点情况
   size_t total_edge_cnt = 0;
   std::vector<size_t> rank_edge_cnt(node_num_, 0);
   std::vector<size_t> cross_edge_cnt(node_num_, 0);
-  for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
-    total_edge_cnt += total_edge_count[part_id];
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    size_t total = 0;
+    size_t edge_cnt = 0;
+    std::vector<size_t> rank_edge(node_num_, 0);
+    std::vector<size_t> cross_edge(node_num_, 0);
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      total += edge_shards[idx][part_id]->get_size();
+      edge_cnt += total_edge_count[idx][part_id];
+      for (int rank = 0; rank < node_num_; ++rank) {
+        rank_edge[rank] += rank_edge_count[rank][idx][part_id];
+        cross_edge[rank] += cross_edge_count[rank][idx][part_id];
+      }
+    }
+    total_edge_cnt += edge_cnt;
+    VLOG(0) << "idx=" << idx << ", total edge nodes="
+            << edge_before_count[idx] << ", left edge nodes count=" << total;
     for (int rank = 0; rank < node_num_; ++rank) {
-      rank_edge_cnt[rank] += rank_edge_count[rank][part_id];
-      cross_edge_cnt[rank] += cross_edge_count[rank][part_id];
+      rank_edge_cnt[rank] += rank_edge[rank];
+      cross_edge_cnt[rank] += cross_edge[rank];
+      VLOG(0) << "rank=" << rank << ", idx=" << idx << ", total edge: " << edge_cnt
+          << ", rank edge: " << rank_edge[rank] << ", cross edge: " << cross_edge[rank]
+          << ", rate: " << double(cross_edge[rank]) / double(rank_edge[rank]);
     }
   }
   VLOG(0) << "total edge count: " << total_edge_cnt;

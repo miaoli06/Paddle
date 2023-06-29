@@ -757,6 +757,7 @@ class GraphTable : public Table {
   void dbh_graph_edge_partition();
   void dbh_graph_feature_partition();
   void fennel_graph_edge_partition();
+  void fennel_graph_edge_partition_etype();
   void filter_graph_edge_nodes();
   void fennel_graph_feature_partition();
   void fix_feature_node_shards(bool load_slot);
