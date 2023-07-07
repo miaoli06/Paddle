@@ -56,6 +56,9 @@ PADDLE_DEFINE_EXPORTED_int32(graph_edges_debug_node_id,
 PADDLE_DEFINE_EXPORTED_int32(graph_edges_debug_node_num,
                             2,
                             "graph debug node num");
+PADDLE_DEFINE_EXPORTED_int32(graph_edges_split_mode_flags,
+                            0,
+                            "graph edges split model flags, 0 fennel, 1 fennel_type");
 
 namespace paddle {
 namespace distributed {
@@ -1252,7 +1255,7 @@ void GraphTable::graph_partition(bool is_edge) {
     }
   } else if (strncasecmp(mode.c_str(), "fennel", 6) == 0) {
     if (is_edge) {
-      if (mode == "fennel_type") {
+      if (FLAGS_graph_edges_split_mode_flags == 1) {
         fennel_graph_edge_partition_etype();
       } else {
         fennel_graph_edge_partition();
@@ -1461,7 +1464,7 @@ void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, ui
   for (auto &t : wait_tasks) {
     hash_count += t.get();
   }
-  VLOG(0) << "query total keys=" << total << ", hash count=" << hash_count;
+//  VLOG(0) << "query total keys=" << total << ", hash count=" << hash_count;
 }
 void GraphTable::fennel_graph_edge_partition() {
   VLOG(0) << "start to process fennel2 egde shard";
