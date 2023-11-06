@@ -13,13 +13,15 @@
 // limitations under the License.
 
 #include "paddle/fluid/framework/executor.h"
+#include "paddle/fluid/framework/naive_executor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
 #include "paddle/fluid/operators/controlflow/while_op_helper.h"
-
 #ifdef PADDLE_WITH_MKLDNN
 #include "paddle/fluid/platform/mkldnn_helper.h"
 #endif
+DECLARE_bool(enable_opt_infer_offload);
+DECLARE_bool(enable_opt_infer_gc_var);
 namespace paddle {
 namespace framework {
 class InferShapeContext;
@@ -78,7 +80,6 @@ class WhileOp : public framework::OperatorBase {
     // Executors (executors declared inside control ops)
     platform::DontClearMKLDNNCache(dev_place);
 #endif
-    framework::Executor executor(dev_place);
     auto *block = Attr<framework::BlockDesc *>(kStepBlock);
 
     auto *program = block->Program();
@@ -135,8 +136,9 @@ class WhileOp : public framework::OperatorBase {
     auto &skip_vars = Attr<std::vector<std::string>>(kSkipEagerDeletionVars);
     VLOG(2) << GetSkipEagerDeletionVarsDebugString(skip_vars);
 
-    auto ctx = executor.Prepare(*program, block->ID(), skip_vars);
     if (!is_test) {
+      framework::Executor executor(dev_place);
+      auto ctx = executor.Prepare(*program, block->ID(), skip_vars);
       while (cond_data) {
         auto &current_scope = scope.NewScope();
         step_scopes->push_back(&current_scope);
@@ -171,25 +173,41 @@ class WhileOp : public framework::OperatorBase {
       }
     } else {
       auto &current_scope = scope.NewScope();
-      executor.CreateVariables(*program, &current_scope, block->ID());
-      while (cond_data) {
-        for (auto &name : current_scope.LocalVarNames()) {
-          auto *var = current_scope.Var(name);
-          if (var->IsType<framework::LoDTensor>()) {
-            // Clear all lod information for all lod_tensors.
-            auto *t = var->GetMutable<framework::LoDTensor>();
-            framework::LoD empty_lod;
-            t->set_lod(empty_lod);
-          } else if (var->IsType<framework::LoDTensorArray>()) {
-            // Clear elements of all tensor arrays.
-            auto *t = var->GetMutable<framework::LoDTensorArray>();
-            t->clear();
-          }
+      // new execute
+      if (FLAGS_enable_opt_infer_offload || FLAGS_enable_opt_infer_gc_var) {
+        framework::NaiveExecutor executor(dev_place);
+        executor.AddSkipVars(skip_vars);
+        executor.Prepare(&current_scope, *program, block->ID(), true);
+        executor.CreateVariables(*program, block->ID(), false, &current_scope);
+        executor.SetRunByExecutor(true);
+        while (cond_data) {
+          executor.Run();
+          cond_data =
+              GetCondData(scope.FindVar(Input(kCondition))->Get<LoDTensor>());
         }
-        executor.RunPreparedContext(
-            ctx.get(), &current_scope, false, false, false);
-        cond_data =
-            GetCondData(scope.FindVar(Input(kCondition))->Get<LoDTensor>());
+      } else {
+        framework::Executor executor(dev_place);
+        auto ctx = executor.Prepare(*program, block->ID(), skip_vars);
+        executor.CreateVariables(*program, &current_scope, block->ID());
+        while (cond_data) {
+          for (auto &name : current_scope.LocalVarNames()) {
+            auto *var = current_scope.Var(name);
+            if (var->IsType<framework::LoDTensor>()) {
+              // Clear all lod information for all lod_tensors.
+              auto *t = var->GetMutable<framework::LoDTensor>();
+              framework::LoD empty_lod;
+              t->set_lod(empty_lod);
+            } else if (var->IsType<framework::LoDTensorArray>()) {
+              // Clear elements of all tensor arrays.
+              auto *t = var->GetMutable<framework::LoDTensorArray>();
+              t->clear();
+            }
+          }
+          executor.RunPreparedContext(
+              ctx.get(), &current_scope, false, false, false);
+          cond_data =
+              GetCondData(scope.FindVar(Input(kCondition))->Get<LoDTensor>());
+        }
       }
       scope.DeleteScope(&current_scope);
     }

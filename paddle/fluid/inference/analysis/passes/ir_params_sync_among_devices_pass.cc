@@ -26,9 +26,38 @@
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/phi/common/data_type.h"
 
+DECLARE_bool(enable_opt_infer_offload);
+DECLARE_bool(enable_opt_infer_debug_mode);
+PADDLE_DEFINE_EXPORTED_bool(enable_offload_pinned_memory,
+                            true,
+                            "enable infer used pinned memory ");
+PADDLE_DEFINE_EXPORTED_int64(infer_offload_min_param_size,
+                             0,
+                             "enable infer offload min param size MB");
+
+extern std::multiset<std::string> g_persistable_vars_;
 namespace paddle {
 namespace inference {
 namespace analysis {
+
+static void tensor2pinned(paddle::framework::LoDTensor *self_tensor) {
+  if (!FLAGS_enable_offload_pinned_memory) {
+    return;
+  }
+#if defined(PADDLE_WITH_CUDA)
+  const size_t need_allocate_size = self_tensor->memory_size();
+  void *data_ptr = self_tensor->data();
+  void *host_buffer = NULL;
+  cudaHostAlloc(reinterpret_cast<void **>(&host_buffer),
+                need_allocate_size,
+                cudaHostAllocDefault);
+  memcpy(host_buffer, data_ptr, need_allocate_size);
+  std::shared_ptr<memory::allocation::Allocation> holder =
+      std::make_shared<memory::allocation::Allocation>(
+          host_buffer, need_allocate_size, platform::CPUPlace());
+  self_tensor->ResetHolderWithType(holder, self_tensor->dtype());
+#endif
+}
 
 #ifdef PADDLE_WITH_ASCEND_CL
 void IrParamsSyncAmongDevicesPass::CopyParamsToNpu(Argument *argument) {
@@ -95,7 +124,7 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToGpu(Argument *argument) {
   platform::Place place = platform::CUDAPlace(argument->gpu_device_id());
   auto *scope = argument->scope_ptr();
   std::vector<std::string> all_vars = scope->LocalVarNames();
-
+  LOG(INFO) << "scope=" << scope;
   // We get all the vars from local_scope instead of the ProgramDesc.
   // Because there exists the case that new parameter variables are not added to
   // the program in the analysis pass.
@@ -113,7 +142,10 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToGpu(Argument *argument) {
   if (with_dynamic_shape) {
     reserve_cpu_weights = true;
   }
-
+  int total_persistable_var = 0;
+  int offload_var = 0;
+  size_t offload_size = 0;
+  size_t offload_memory_size = FLAGS_infer_offload_min_param_size * 1024 * 1024;
   std::unordered_set<std::string> visited;
   for (auto *node : paddle::framework::ir::TopologySortOperations(graph)) {
     if (!node->IsOp()) continue;
@@ -134,21 +166,41 @@ void IrParamsSyncAmongDevicesPass::CopyParamsToGpu(Argument *argument) {
       PADDLE_ENFORCE_NOT_NULL(var,
                               platform::errors::PreconditionNotMet(
                                   "The var should not be nullptr"));
+      ++total_persistable_var;
       if (var->IsType<framework::LoDTensor>() ||
           var->IsType<framework::Tensor>()) {
         auto *t = var->GetMutable<framework::LoDTensor>();
         auto var_data_type = var_node->Var()->GetDataType();
-        VLOG(5) << "var_name is " << var_name << ", data type is "
-                << var_data_type;
-        platform::CPUPlace cpu_place;
-        framework::LoDTensor temp_tensor;
-        temp_tensor.Resize(t->dims());
-        paddle::framework::TensorCopySync(*t, cpu_place, &temp_tensor);
-        t->clear();
-        paddle::framework::TensorCopySync(temp_tensor, place, t);
+        VLOG(3) << "var_name is " << var_name << ", data type is "
+                << var_data_type << ", place is" << t->place()
+                << ", IsInitialized is " << var->IsInitialized()
+                << ", memory size=" << t->numel();
+        if (FLAGS_enable_opt_infer_offload
+            && t->memory_size() > offload_memory_size) {
+          tensor2pinned(t);
+          g_persistable_vars_.insert(var_name);
+          if (FLAGS_enable_opt_infer_debug_mode) {
+            VLOG(0) << "var_name is " << var_name << ", data type is "
+                    << var_data_type << ", place is" << t->place()
+                    << ", IsInitialized is " << var->IsInitialized()
+                    << ", numel size=" << t->numel();
+          }
+          offload_size += t->memory_size();
+          ++offload_var;
+        } else {
+          platform::CPUPlace cpu_place;
+          framework::LoDTensor temp_tensor;
+          temp_tensor.Resize(t->dims());
+          paddle::framework::TensorCopySync(*t, cpu_place, &temp_tensor);
+          t->clear();
+          paddle::framework::TensorCopySync(temp_tensor, place, t);
+        }
       }
     }
   }
+  VLOG(0) << "total_persistable_var count=" << total_persistable_var
+          << ", offload var count=" << offload_var
+          << ", offload memory=" << offload_size / 1024.0 / 1024.0 << "MB";
 }
 
 #endif

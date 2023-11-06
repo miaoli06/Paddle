@@ -15,16 +15,30 @@
 #include "paddle/fluid/framework/naive_executor.h"
 
 #include <string>
-
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/variable_helper.h"
 #include "paddle/fluid/platform/denormal.h"
+#include "paddle/fluid/platform/timer.h"
 #ifdef PADDLE_WITH_MKLDNN
 #include "paddle/fluid/platform/mkldnn_helper.h"
 #endif
 #if PADDLE_WITH_TENSORRT
 #include "paddle/fluid/operators/tensorrt/tensorrt_engine_op.h"
 #endif
+#include "paddle/fluid/framework/executor_gc_helper.h"
+#include "paddle/fluid/string/string_helper.h"
+
+PADDLE_DEFINE_EXPORTED_bool(enable_opt_infer_gc_var,
+                            false,
+                            "enable opt infer gc var");
+PADDLE_DEFINE_EXPORTED_bool(enable_opt_infer_offload,
+                            false,
+                            "enable opt infer offload");
+PADDLE_DEFINE_EXPORTED_bool(enable_opt_infer_debug_mode,
+                            false,
+                            "enable opt infer offload");
+
+std::multiset<std::string> g_persistable_vars_;
 
 namespace paddle {
 namespace framework {
@@ -37,25 +51,193 @@ void NaiveExecutor::Prepare(Scope *scope,
   } else {
     scope_ = scope;
   }
+  root_scope_ = scope;
+  while (root_scope_->parent()) {
+    root_scope_ = root_scope_->parent();
+  }
 
-  VLOG(3) << "NaiveExecutor init with scope " << scope;
+  gc_ = nullptr;
+  int64_t max_memory_size = GetEagerDeletionThreshold();
+  if (FLAGS_enable_opt_infer_gc_var && max_memory_size >= 0) {
+    auto gc = CreateGarbageCollector(place_, max_memory_size);
+    gc_ = gc.release();
+  }
+
   CreateOps(program_desc, block_id, with_feed_fetch_ops);
+  // debug print info
+  if (FLAGS_enable_opt_infer_debug_mode) {
+    VLOG(0) << "NaiveExecutor init with scope " << scope
+            << ", root scope=" << root_scope_
+            << ", op count=" << ops_.size()
+            << ", enable gc=" << FLAGS_enable_opt_infer_gc_var
+            << ", gc op count=" << unused_vars_.size()
+            << ", enable offload=" << FLAGS_enable_opt_infer_offload
+            << ", offload op count=" << offload_vars_.size();
+  }
 }
+inline void GetOpParam(const std::unique_ptr<OperatorBase> &op,
+                       const Scope *scope,
+                       size_t *in_param,
+                       size_t *out_param) {
+  for (auto &obj : op->Inputs()) {
+    for (auto &name : obj.second) {
+      auto var = scope->FindVar(name);
+      if (var == nullptr) {
+        continue;
+      }
+      if (var->IsType<LoDTensor>()) {
+        auto gc_tensor = var->GetMutable<LoDTensor>();
+        *in_param += gc_tensor->memory_size();
+      } else if (var->IsType<phi::SelectedRows>()) {
+        auto gc_tensor = var->GetMutable<phi::SelectedRows>()->mutable_value();
+        *in_param += gc_tensor->memory_size();
+      } else if (var->IsType<LoDTensorArray>()) {
+        auto *tensor_arr = var->GetMutable<LoDTensorArray>();
+        for (auto &t : *tensor_arr) {
+          *in_param += t.memory_size();
+        }
+      }
+    }
+  }
+  for (auto &obj : op->Outputs()) {
+    for (auto &name : obj.second) {
+      auto var = scope->FindVar(name);
+      if (var == nullptr) {
+        continue;
+      }
+      if (var->IsType<LoDTensor>()) {
+        auto gc_tensor = var->GetMutable<LoDTensor>();
+        *out_param += gc_tensor->memory_size();
+      } else if (var->IsType<phi::SelectedRows>()) {
+        auto gc_tensor = var->GetMutable<phi::SelectedRows>()->mutable_value();
+        *out_param += gc_tensor->memory_size();
+      } else if (var->IsType<LoDTensorArray>()) {
+        auto *tensor_arr = var->GetMutable<LoDTensorArray>();
+        for (auto &t : *tensor_arr) {
+          *out_param += t.memory_size();
+        }
+      }
+    }
+  }
+}
+void NaiveExecutor::RunDebug() {
+  platform::Timer tm;
+  tm.Start();
+  platform::Timer cp_tm;
+  platform::Timer gc_tm;
+  platform::ScopedFlushDenormal flush;
 
+  size_t copy_data_len = 0;
+  size_t total_in_param = 0;
+  size_t total_out_param = 0;
+
+  const platform::DeviceContext *dev_ctx =
+      platform::DeviceContextPool::Instance().Get(place_);
+  for (auto &op : ops_) {
+    VLOG(4) << std::this_thread::get_id() << " run "
+            << op->DebugStringEx(scope_) << " on scope " << scope_;
+    auto it = offload_vars_.find(op.get());
+    if (it != offload_vars_.end()) {
+      if (op->Type() != "while") {
+        cp_tm.Resume();
+        it->second.CopyInputs(root_scope_, place_, scope_);
+        dev_ctx->Wait();
+        cp_tm.Pause();
+      }
+    }
+    op->SetIsCalledByExecutor(run_by_executor_);
+    op->Run(*scope_, place_);
+
+    size_t in_param = 0;
+    size_t out_param = 0;
+    GetOpParam(op, scope_, &in_param, &out_param);
+
+    if (it != offload_vars_.end()) {
+      dev_ctx->Wait();
+      gc_tm.Resume();
+      it->second.GCInputsVar(scope_);
+      gc_tm.Pause();
+      copy_data_len += it->second.total_param_len;
+    }
+    // gc input and output var
+    if (gc_) {
+      gc_tm.Resume();
+      DeleteUnusedTensors(*scope_, op.get(), unused_vars_, gc_);
+      gc_tm.Pause();
+    }
+    VLOG(1) << "op name=" << op->Type() << ", input len=" << in_param
+            << ", output len=" << out_param;
+    total_in_param += in_param;
+    total_out_param += out_param;
+  }
+  dev_ctx->Wait();
+  tm.Pause();
+
+  VLOG(0) << "exec total span=" << tm.ElapsedSec()
+          << ", copy span=" << cp_tm.ElapsedSec()
+          << ", gc span=" << gc_tm.ElapsedSec()
+          << ", copy memory=" << copy_data_len / 1024.0 / 1024.0 << "MB"
+          << ", total input=" << total_in_param / 1024.0 / 1024.0 << "MB"
+          << ", total output=" << total_out_param / 1024.0 / 1024.0 << "MB";
+}
+void NaiveExecutor::RunNormal() {
+  platform::ScopedFlushDenormal flush;
+  // old executor
+  for (auto &op : ops_) {
+    VLOG(4) << std::this_thread::get_id() << " run "
+            << op->DebugStringEx(scope_) << " on scope " << scope_;
+    op->SetIsCalledByExecutor(run_by_executor_);
+    op->Run(*scope_, place_);
+    // gc input and output var
+    if (gc_) {
+      DeleteUnusedTensors(*scope_, op.get(), unused_vars_, gc_);
+    }
+  }
+}
+void NaiveExecutor::RunOffLoad() {
+  platform::ScopedFlushDenormal flush;
+  for (auto &op : ops_) {
+    VLOG(4) << std::this_thread::get_id() << " run "
+            << op->DebugStringEx(scope_) << " on scope " << scope_;
+    auto it = offload_vars_.find(op.get());
+    if (op->Type() != "while" && it != offload_vars_.end()) {
+      it->second.CopyInputs(root_scope_, place_, scope_);
+    }
+    op->SetIsCalledByExecutor(run_by_executor_);
+    op->Run(*scope_, place_);
+    if (it != offload_vars_.end()) {
+      it->second.GCInputsVar(scope_);
+    }
+    // gc input and output var
+    if (gc_) {
+      DeleteUnusedTensors(*scope_, op.get(), unused_vars_, gc_);
+    }
+  }
+}
 void NaiveExecutor::Run() {
 #ifdef PADDLE_WITH_MKLDNN
   platform::AttachPointerHashToMKLDNNKey(this, place_);
   platform::RegisterModelLayout(ops_, place_);
 #endif
-  platform::ScopedFlushDenormal flush;
-  for (auto &op : ops_) {
-    VLOG(4) << std::this_thread::get_id() << " run "
-            << op->DebugStringEx(scope_) << " on scope " << scope_;
-    op->SetIsCalledByExecutor(false);
-    op->Run(*scope_, place_);
+  if (FLAGS_enable_opt_infer_debug_mode) {
+    RunDebug();
+  } else if (FLAGS_enable_opt_infer_offload) {
+    RunOffLoad();
+  } else {
+    RunNormal();
+  }
+  if (!run_by_executor_) {
+    return;
+  }
+  if (gc_) {
+    gc_->DirectClearCallback([this](){
+      scope_->DropKids();
+    });
+  } else {
+    platform::DeviceContextPool::Instance().Get(place_)->Wait();
+    scope_->DropKids();
   }
 }
-
 void NaiveExecutor::CreateVariables(const ProgramDesc &desc,
                                     int block_id,
                                     bool persistable,
@@ -74,6 +256,7 @@ void NaiveExecutor::CreateVariables(const ProgramDesc &desc,
   while (anc->parent()) {
     anc = anc->parent();
   }
+  VLOG(1) << "execute root scope=" << root_scope_;
 
   int num_vars = 0;
   for (auto &var : global_block.AllVars()) {
@@ -98,13 +281,26 @@ void NaiveExecutor::CreateVariables(const ProgramDesc &desc,
       }
     }
   }
-  VLOG(4) << "naive executor create " << num_vars << " vars";
+  VLOG(1) << "naive executor create " << num_vars << " vars";
 }
-
 void NaiveExecutor::CreateOps(const ProgramDesc &desc,
                               int block_id,
                               bool with_feed_fetch_ops) {
+  auto &global_block = desc.Block(block_id);
+  // create op
+  auto ops_desc = global_block.AllOps();
   for (const auto &op_desc : desc.Block(block_id).AllOps()) {
+    // gc var
+    if (gc_) {
+      if (op_desc->Type() == "feed" || op_desc->Type() == "fetch") {
+        for (auto &o : op_desc->Inputs()) {
+          skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
+        }
+        for (auto &o : op_desc->Outputs()) {
+          skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
+        }
+      }
+    }
     if (!with_feed_fetch_ops &&
         (op_desc->Type() == "feed" || op_desc->Type() == "fetch")) {
       LOG(INFO) << "---  skip [" << op_desc->Input("X")[0] << "], "
@@ -112,7 +308,27 @@ void NaiveExecutor::CreateOps(const ProgramDesc &desc,
       continue;
     }
     ops_.emplace_back(OpRegistry::CreateOp(*op_desc));
+    // offload
+    if (FLAGS_enable_opt_infer_offload) {
+      auto &op = ops_.back();
+      // offload
+      for (auto &o : op->Inputs()) {
+        for (auto &name : o.second) {
+          if (g_persistable_vars_.find(name) == g_persistable_vars_.end()) {
+            continue;
+          }
+          auto dest_var = scope_->Var(name);  // init local var
+          CHECK(dest_var != nullptr);
+          offload_vars_[op.get()].persistable_inputs.push_back(name);
+        }
+      }
+    }
   }
+  if (!gc_) {
+    return;
+  }
+  // get used
+  unused_vars_ = GetUnusedVars(global_block, ops_, skip_vars_);
 }
 
 LoDTensor *NaiveExecutor::FindTensor(const std::string &name) {
@@ -136,6 +352,12 @@ void NaiveExecutor::CleanFeedFetchOps() {
   }
   ops_.swap(ops);
 }
+void NaiveExecutor::AddSkipVars(const std::vector<std::string> &skip_vars) {
+  if (skip_vars.empty()) {
+    return;
+  }
+  skip_vars_.insert(skip_vars_.end(), skip_vars.begin(), skip_vars.end());
+}
 
 NaiveExecutor::~NaiveExecutor() {
 #ifdef PADDLE_WITH_MKLDNN
@@ -143,6 +365,10 @@ NaiveExecutor::~NaiveExecutor() {
   // this is needed to have mkl-dnn unit tests working
   platform::ClearMKLDNNCache(place_, this);
 #endif
+  if (gc_) {
+    delete gc_;
+    gc_ = nullptr;
+  }
 }
 
 void NaiveExecutor::ResetTrtOps(int num) {
