@@ -291,7 +291,7 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
     auto ffn1_biases = ctx.MultiInput<phi::DenseTensor>("FFN1Bias");
     auto ffn1_weight_dim = ffn1_weights[0]->dims();
 
-    int dim_ffn = ffn1_weight_dim[1];
+    int dim_ffn = ffn1_weight_dim[0];
     VLOG(0) << "ffn1 weight dim: " << ffn1_weight_dim << ", dim ffn: " << dim_ffn;
     if (weight_dtype == "int4") {
       dim_ffn = dim_ffn * 2;

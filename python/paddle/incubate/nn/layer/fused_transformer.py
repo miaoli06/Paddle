@@ -1607,7 +1607,7 @@ class FusedMultiTransformerWeightOnly(Layer):
                 is_bias=True,
             )
             linear_weight = self.create_parameter(
-                shape=[num_heads * self.head_dim, embed_dim],
+                shape=[embed_dim, int(num_heads * self.head_dim)],
                 attr=linear_weight_attr,
                 dtype=self._dtype,
                 is_bias=False,
@@ -1637,7 +1637,7 @@ class FusedMultiTransformerWeightOnly(Layer):
                 shape=[embed_dim], attr=ffn_ln_bias_attr, is_bias=True, dtype="float32"
             )
             ffn1_weight = self.create_parameter(
-                shape=[embed_dim, dim_feedforward],
+                shape=[dim_feedforward, embed_dim],
                 attr=ffn1_weight_attr,
                 dtype=self._dtype,
                 is_bias=False,
@@ -1656,7 +1656,7 @@ class FusedMultiTransformerWeightOnly(Layer):
                 is_bias=True,
             )
             ffn2_weight = self.create_parameter(
-                shape=[dim_feedforward, embed_dim],
+                shape=[embed_dim, dim_feedforward],
                 attr=ffn2_weight_attr,
                 dtype=self._dtype,
                 is_bias=False,
