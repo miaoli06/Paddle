@@ -128,6 +128,8 @@ class FusedMultiTransformerWeightOnlyOp : public framework::OperatorWithKernel {
  protected:
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext &ctx) const override {
+    auto *input_x = ctx.Input<phi::DenseTensor>("X");
+    VLOG(0) << "input x type: " << (*input_x).dtype();
     return framework::OpKernelType(
         OperatorWithKernel::IndicateVarDataType(ctx, "X"), ctx.GetPlace());
   }
@@ -159,6 +161,7 @@ class FusedMultiTransformerWeightOnlyOpMaker
              "H. Here, H represents the last dimension of its input tensor.")
         .AsDuplicable();
     AddInput("QKVW", "The qkv weight tensor.").AsDuplicable();
+    AddInput("QKVWScale", "The qkv weight scale tensor.").AsDuplicable();
     AddInput("QKVBias", "The qkv bias tensor.").AsDispensable().AsDuplicable();
     AddInput("CacheKV", "(optional) The cached KV for generation inference.")
         .AsDispensable()
@@ -181,6 +184,8 @@ class FusedMultiTransformerWeightOnlyOpMaker
     AddInput("SrcMask", "(optional) The attention mask tensor in fmha.")
         .AsDispensable();
     AddInput("OutLinearW", "The out_linear weight tensor.").AsDuplicable();
+    AddInput("OutLinearWScale", "The out_linear weight scale tensor.")
+        .AsDuplicable();
     AddInput("OutLinearBias", "The out_linear bias tensor.")
         .AsDispensable()
         .AsDuplicable();
@@ -190,25 +195,16 @@ class FusedMultiTransformerWeightOnlyOpMaker
         .AsDuplicable();
     AddInput("FFN1Weight", "The linear1 weight of FusedFeedForward op")
         .AsDuplicable();
+    AddInput("FFN1WeightScale", "The ffn1 weight scale tensor.")
+        .AsDuplicable();
     AddInput("FFN1Bias", "The linear1 bias of FusedFeedForward op")
         .AsDispensable()
         .AsDuplicable();
     AddInput("FFN2Weight", "The linear2 weight of FusedFeedForward op")
         .AsDuplicable();
+    AddInput("FFN2WeightScale", "The ffn2 weight scale tensor.")
+        .AsDuplicable();
     AddInput("FFN2Bias", "The linear2 bias input of FusedFeedForward op")
-        .AsDispensable()
-        .AsDuplicable();
-    //weight only quant scale
-    AddInput("QKVWScale", "QKVWScale")        
-        .AsDispensable()
-        .AsDuplicable();
-    AddInput("OutLinearWScale", "OutLinearWScale")        
-        .AsDispensable()
-        .AsDuplicable();
-    AddInput("FFN1WeightScale", "FFN1WeightScale")        
-        .AsDispensable()
-        .AsDuplicable();
-    AddInput("FFN2WeightScale", "FFN2WeightScale")        
         .AsDispensable()
         .AsDuplicable();
     AddOutput("CacheKVOut", "The updated cache KV. Inplace with CacheKV")
@@ -220,6 +216,7 @@ class FusedMultiTransformerWeightOnlyOpMaker
                   "else, uses post_layer_norm architecuture. "
                   "[default true].")
         .SetDefault(true);
+/**
     AddAttr<int>("rotary_emb_dims",
                  "the Attr(dims) for RotaryPosEmb's Computation  [default 0].")
         .SetDefault(0)
@@ -232,6 +229,7 @@ class FusedMultiTransformerWeightOnlyOpMaker
                   "0 and 2, But received [%s].",
                   rotary_emb_dims));
         });
+**/
     AddAttr<float>("epsilon",
                    "Constant for numerical stability [default 1e-5].")
         .SetDefault(1e-5)
@@ -257,19 +255,6 @@ class FusedMultiTransformerWeightOnlyOpMaker
                   "(bool, default false) Set to true for inference only, false "
                   "for training. Some layers may run faster when this is true.")
         .SetDefault(false);
-    AddAttr<std::string>(
-        "dropout_implementation",
-        "[\"downgrade_in_infer\"|\"upscale_in_train\"]"
-        "The meaning is the same as 'attn_dropout_implementation'.")
-        .SetDefault("downgrade_in_infer")
-        .AddCustomChecker([](const std::string &type) {
-          PADDLE_ENFORCE_EQ(
-              type == "downgrade_in_infer" || type == "upscale_in_train",
-              true,
-              platform::errors::InvalidArgument(
-                  "dropout_implementation can only be downgrade_in_infer or "
-                  "upscale_in_train"));
-        });
     AddAttr<std::string>("act_method", "act_method")
         .SetDefault("gelu")
         .AddCustomChecker([](const std::string &act_type) {
@@ -299,13 +284,22 @@ class FusedMultiTransformerWeightOnlyOpMaker
                                 "FusedMultiTransformer. "));
         });
 
-    AddAttr<bool>("quant_weight","Whether do weight quant")
-        .SetDefault(false);
-
     AddAttr<int>(
         "ring_id",
         "ring id for tensor model parallel. distributed training and inference")
         .SetDefault(-1);
+    AddAttr<int>("rotary_emb_dims",
+                  "the Attr(dims) for RotaryPosEmb's Computation  [default 0].")
+         .SetDefault(0)
+         .AddCustomChecker([](const int &rotary_emb_dims) {
+           PADDLE_ENFORCE_EQ(
+               rotary_emb_dims >= 0 && rotary_emb_dims <= 2,
+               true,
+               platform::errors::InvalidArgument(
+                   "'rotary_emb_dims' in Op(Rotray) should be between"
+                   "0 and 2, But received [%s].",
+                   rotary_emb_dims));
+         });
     
     AddComment(R"DOC(fused multi transformer quant weight only layers op)DOC");
   }

@@ -1554,6 +1554,8 @@ class FusedMultiTransformerWeightOnly(Layer):
                 assert len(attrs) == num_layers
                 return attrs[idx]
             return attrs
+        weight_int8 = False if self._weight_dtype == "int4" else True
+        print(f"_weight_dtype: {self._weight_dtype}, weight_int8: {weight_int8}")
 
         for i in range(num_layers):
             ln_scale_attr = get_attr(ln_scale_attrs, i)
@@ -1594,7 +1596,7 @@ class FusedMultiTransformerWeightOnly(Layer):
             qkv_scale = self.create_parameter(
                 shape=[int(3 * num_heads * self.head_dim)],
                 attr=qkv_scale_attr,
-                dtype="float32",
+                dtype=self._dtype,
                 is_bias=False,
                 default_initializer=Constant(value=1.0),
             )
@@ -1613,7 +1615,7 @@ class FusedMultiTransformerWeightOnly(Layer):
             linear_scale = self.create_parameter(
                 shape=[embed_dim],
                 attr=linear_scale_attr,
-                dtype="float32",
+                dtype=self._dtype,
                 is_bias=False,
                 default_initializer=Constant(value=1.0),
             )
@@ -1641,9 +1643,9 @@ class FusedMultiTransformerWeightOnly(Layer):
                 is_bias=False,
             )
             ffn1_scale = self.create_parameter(
-                shape=[embed_dim],
+                shape=[dim_feedforward],
                 attr=ffn1_scale_attr,
-                dtype="float32",
+                dtype=self._dtype,
                 is_bias=False,
                 default_initializer=Constant(value=1.0),
             )
@@ -1662,7 +1664,7 @@ class FusedMultiTransformerWeightOnly(Layer):
             ffn2_scale = self.create_parameter(
                 shape=[embed_dim],
                 attr=ffn2_scale_attr,
-                dtype="float32",
+                dtype=self._dtype,
                 is_bias=False,
                 default_initializer=Constant(value=1.0),
             )
@@ -1705,9 +1707,9 @@ class FusedMultiTransformerWeightOnly(Layer):
         self.dropout_rate = dropout_rate
         self.activation = activation
         self.name = name
+        #trans weight to int8
+        self._int8_decorate()
 
-        weight_int8 = False if self._weight_dtype == "int4" else True
-        print("_weight_dtype: {self._weight_dtype}, weight_int8: {weight_int8}")
 
     def forward(self, src, attn_mask=None, caches=None, seq_lens=None, beam_offset=None, time_step=None):
         """
@@ -1744,41 +1746,37 @@ class FusedMultiTransformerWeightOnly(Layer):
             caches,
             'pre_layer_norm',
             self.normalize_before,
-            'weight_dtype',
-            self._weight_dtype,
             'epsilon',
             self._epsilon,
+            'dropout_rate',
+            self.dropout_rate,
+            'is_test',
+            not self.training,
             'act_method',
             self.activation,
-            'training',
-            self.training,
-            'mode',
-            'upscale_in_train',
             'trans_qkvw',
             self._trans_qkvw,
+            'weight_dtype',
+            self._weight_dtype,
             'ring_id',
-            self._ring_id,
+            self._ring_id
         )
         if caches is not None:
              return final_out, cache_kv_out
         return final_out
 
-    def _amp_decorate(self, dtype):
+    def _int8_decorate(self):
         # tmp fix for amp.decorator(O2)
-        def trans_to_fp16(l):
+        def trans_to_int8(l):
             for param in l:
                 if param is not None:
                     with no_grad():
-                        param_applied = _to_dtype(param, dtype)
-        trans_to_fp16(self.qkv_weights)
-        trans_to_fp16(self.qkv_biases)
-        trans_to_fp16(self.linear_weights)
-        trans_to_fp16(self.linear_biases)
-        trans_to_fp16(self.ffn1_weights)
-        trans_to_fp16(self.ffn1_biases)
-        trans_to_fp16(self.ffn2_weights)
-        trans_to_fp16(self.ffn2_biases)
-        self._dtype = dtype
+                        param_applied = _to_dtype(param, "int8")
+        trans_to_int8(self.qkv_weights)
+        trans_to_int8(self.linear_weights)
+        trans_to_int8(self.ffn1_weights)
+        trans_to_int8(self.ffn2_weights)
+        self._dtype = "int8"
 
 
 
