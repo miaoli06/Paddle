@@ -160,7 +160,7 @@ class FusedMultiTransformerWeightOnlyOpMaker
              "H. Here, H represents the last dimension of its input tensor.")
         .AsDuplicable();
     AddInput("QKVW", "The qkv weight tensor.").AsDuplicable();
-    //AddInput("QKVWScale", "The qkv weight scale tensor.").AsDuplicable();
+    AddInput("QKVWScale", "The qkv weight scale tensor.").AsDuplicable();
     AddInput("QKVBias", "The qkv bias tensor.").AsDispensable().AsDuplicable();
     AddInput("CacheKV", "(optional) The cached KV for generation inference.")
         .AsDispensable()
@@ -195,15 +195,15 @@ class FusedMultiTransformerWeightOnlyOpMaker
         .AsDuplicable();
     AddInput("FFN1Weight", "The linear1 weight of FusedFeedForward op")
         .AsDuplicable();
-    //AddInput("FFN1WeightScale", "The ffn1 weight scale tensor.")
-    //    .AsDuplicable();
+    AddInput("FFN1WeightScale", "The ffn1 weight scale tensor.")
+        .AsDuplicable();
     AddInput("FFN1Bias", "The linear1 bias of FusedFeedForward op")
         .AsDispensable()
         .AsDuplicable();
     AddInput("FFN2Weight", "The linear2 weight of FusedFeedForward op")
         .AsDuplicable();
-    //AddInput("FFN2WeightScale", "The ffn2 weight scale tensor.")
-    //   .AsDuplicable();
+    AddInput("FFN2WeightScale", "The ffn2 weight scale tensor.")
+       .AsDuplicable();
     AddInput("FFN2Bias", "The linear2 bias input of FusedFeedForward op")
         .AsDispensable()
         .AsDuplicable();

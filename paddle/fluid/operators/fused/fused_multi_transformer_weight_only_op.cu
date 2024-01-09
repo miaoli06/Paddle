@@ -135,7 +135,7 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
     // x: qkv's input [batch_size, seq_len, dim_embed]
     // y: qkv's weight: [3, num_head, dim_head, dim_embed]
     auto qkv_weights = ctx.MultiInput<phi::DenseTensor>("QKVW");
-    //auto qkv_scales = ctx.MultiInput<phi::DenseTensor>("QKVWScale");
+    auto qkv_scales = ctx.MultiInput<phi::DenseTensor>("QKVWScale");
     auto qkv_biases = ctx.MultiInput<phi::DenseTensor>("QKVBias");
     const std::string weight_dtype = ctx.Attr<std::string>("weight_dtype");
     //const bool trans_qkvw = ctx.Attr<bool>("trans_qkvw");
@@ -286,8 +286,8 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
     auto ffn1_biases = ctx.MultiInput<phi::DenseTensor>("FFN1Bias");
     auto ffn1_weight_dim = ffn1_weights[0]->dims();
 
-    //int dim_ffn = ffn1_weight_dim[0];
-    int dim_ffn = ffn1_weight_dim[1];
+    int dim_ffn = ffn1_weight_dim[0];
+    //int dim_ffn = ffn1_weight_dim[1];
     FFNGluHelper<T> ffn1_glu_helper(
         dev_ctx, act_method, token_num, dim_ffn / 2, dim_ffn, dim_embed);
     auto ffn1_linear_compute = AttnMatMul<T>(
@@ -391,10 +391,8 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
       // NOTE: in decoder stage, bias is fused in fmha
       const phi::DenseTensor *bias = time_step ? nullptr : qkv_bias;
       if (!pre_layer_norm && i == 0) {
-        VLOG(0) << "not pre layer norm";
         const phi::DenseTensor *tmp_input_x =
             (encoder_remove_padding) ? &x_remove_padding : input_x;
-        /**
         weight_only_gemm.Linear(
              *tmp_input_x,
              *qkv_weights[i],
@@ -405,16 +403,17 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
              dim_embed,
              default_act,
              &qkv_out);
-        **/
-        qkv_compute.ComputeForward(
-            qkv_weights[i], tmp_input_x, bias, &qkv_out, &qkv_out);
+        //qkv_compute.ComputeForward(
+        //    qkv_weights[i], tmp_input_x, bias, &qkv_out, &qkv_out);
       } else {
-        qkv_compute.ComputeForward(
-            qkv_weights[i], buf1, bias, &qkv_out, &qkv_out);
-        /**
+        //qkv_compute.ComputeForward(
+        //    qkv_weights[i], buf1, bias, &qkv_out, &qkv_out);
         VLOG(0) << "layer id=" << i << ", qkv input=" << buf1->dims()
                << ", weight=" << qkv_weights[i]->dims()
+               << ", scale=" << qkv_scales[i]->dims()
                << ", output=" << qkv_out.dims();
+        VLOG(0) << "token num=" << token_num << ", output size=" << qkv_output_size
+                << ", dim_embed=" << dim_embed; 
         weight_only_gemm.Linear(
           *buf1,
           *qkv_weights[i],
@@ -425,7 +424,6 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
           dim_embed,
           default_act,
           &qkv_out);
-        **/
       }
 
       // step3. fmha
@@ -600,7 +598,10 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
 #endif
       VLOG(0) << "layer id=" << i << ", out linear input=" << fmha_out.dims()
               << ", weight=" << out_linear_weights[i]->dims()
-              << ", out linear out: " << (*buf1).dims();
+              << ", scale=" << out_linear_scales[i]->dims()
+              << ", out linear out: " << buf1->dims();
+      VLOG(0) << "token num=" << token_num << ", dim embed=" << dim_embed
+              << ", hidden size=" << hidden_size;
       //PrintMatrix(fmha_out_data, bsz*seq_len*num_head*dim_head, "fmha_out", i);
       if (pre_layer_norm) {
         //out_linear_compute.ComputeForward(
@@ -676,6 +677,7 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
 #endif
 
       // step6. ffn matmul1
+      /**
       if (use_glu) {
         ffn1_glu_helper.Compute(buf1,
                                 ffn1_weights[i],
@@ -686,7 +688,14 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
         ffn1_linear_compute.ComputeForward(
             ffn1_weights[i], buf1, nullptr, &ffn1_out, nullptr);
       }
-      /**
+      **/
+
+      VLOG(0) << "layer id=" << i << ", ffn1 input=" << buf1->dims()
+                 << ", weight=" << ffn1_weights[i]->dims()
+                 << ", scale=" << ffn1_weights_scales[i]->dims()
+                 << ", ffn1 out: " << (ffn1_out).dims();
+      VLOG(0) << "token num=" << token_num << ", dim ffn=" << dim_ffn
+                 << ", dim_embed=" << dim_embed;
       weight_only_gemm.Linear(*buf1,
                               *ffn1_weights[i],
                               nullptr,
@@ -696,7 +705,6 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
                               dim_embed,
                               default_act,
                               &ffn1_out);
-      **/
 #ifdef _DEBUG_FUSED_MULTI_TRANSFORMER
       VLOG(0) << "step6";
 #endif
@@ -713,9 +721,14 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
       }
       // step8. ffn2 matmul
       if (pre_layer_norm) {
-        ffn2_linear_compute.ComputeForward(
-            ffn2_weights[i], &ffn1_dropout_out, nullptr, buf1, nullptr);
-        /**
+        //ffn2_linear_compute.ComputeForward(
+        //    ffn2_weights[i], &ffn1_dropout_out, nullptr, buf1, nullptr);
+        VLOG(0) << "layer id=" << i << ", ffn2 input=" << ffn1_dropout_out.dims()
+                    << ", weight=" << ffn2_weights[i]->dims()
+                    << ", scale=" << ffn2_weights_scales[i]->dims()
+                    << ", ffn2 out: " << buf1->dims();
+        VLOG(0) << "token num=" << token_num << ", dim embed=" << dim_embed
+                    << ", dim_ffn=" << dim_ffn;
         weight_only_gemm.Linear(ffn1_dropout_out,
                                 *ffn2_weights[i],
                                 nullptr,
@@ -725,10 +738,18 @@ class FusedMultiTransformerWeightOnlyOpKernel : public framework::OpKernel<T> {
                                 dim_ffn,
                                 default_act,
                                 buf1);
-        **/
       } else {
-        ffn2_linear_compute.ComputeForward(
-            ffn2_weights[i], &ffn1_dropout_out, nullptr, buf0, nullptr);
+        //ffn2_linear_compute.ComputeForward(
+        //    ffn2_weights[i], &ffn1_dropout_out, nullptr, buf0, nullptr);
+        weight_only_gemm.Linear(ffn1_dropout_out,
+                                *ffn2_weights[i],
+                                nullptr,
+                                *ffn2_weights_scales[i],
+                                token_num,
+                                dim_embed,
+                                dim_ffn,
+                                default_act,
+                                buf0);
       }
 #ifdef _DEBUG_FUSED_MULTI_TRANSFORMER
       VLOG(0) << "step8.0";
